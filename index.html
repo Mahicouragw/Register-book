@@ -1,0 +1,191 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>RegisterBook Community — Shared Digital Register Books</title>
+  <meta name="description" content="Replace paper register books with shared digital books. Create unlimited registers, share view-only, search by date, chat with staff.">
+  <meta name="theme-color" content="#0f766e">
+  <link rel="stylesheet" href="styles.css">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='16' fill='%230f766e'/%3E%3Ctext x='50' y='58' text-anchor='middle' font-size='52' fill='white'%3E📒%3C/text%3E%3C/svg%3E">
+</head>
+<body>
+  <!-- Login Gate -->
+  <div id="loginGate" class="login-gate">
+    <div class="gate-card">
+      <div class="gate-logo">📒 RegisterBook <span>Community</span></div>
+      <div class="gate-sub">One phone holds unlimited register books. Create, share view-only, search by date — even with misspellings. For staff community.</div>
+
+      <button id="googleLoginBtn" class="btn btn-google btn-block" onclick="handleGoogleLogin()">
+        <img src="https://www.gstatic.com/images/branding/product/1x/gsa_512dp.png" alt="" style="width:18px;height:18px;object-fit:contain;background:#fff;border-radius:50%"> Continue with Google
+      </button>
+      <div id="authHint" class="gate-hint">Sign in with Google to sync across phones. Or try demo — no account needed.</div>
+
+      <div class="gate-divider">or</div>
+      <button class="btn btn-primary btn-block" onclick="enterDemo('mahi')">Try the demo — no account needed</button>
+
+      <div class="demo-chips" id="gateDemoChips">
+        <button class="demo-chip" onclick="enterDemo('mahi')"><img src="https://i.pravatar.cc/100?img=5"> Mahi</button>
+        <button class="demo-chip" onclick="enterDemo('goldfish')"><img src="https://i.pravatar.cc/100?img=8"> Goldfish</button>
+        <button class="demo-chip" onclick="enterDemo('silverfish')"><img src="https://i.pravatar.cc/100?img=9"> Silverfish</button>
+        <button class="demo-chip" onclick="enterDemo('priya')"><img src="https://i.pravatar.cc/100?img=26"> Priya</button>
+        <button class="demo-chip" onclick="enterDemo('rahul')"><img src="https://i.pravatar.cc/100?img=12"> Rahul</button>
+        <button class="demo-chip" onclick="enterDemo('anjali')"><img src="https://i.pravatar.cc/100?img=23"> Anjali</button>
+      </div>
+      <div class="gate-foot">
+        Staff have to buy many expensive paper books — Medical Checklist, Bill Book, Attendance... This app replaces them with shared digital books.<br>
+        <span class="muted">Secure: only the creator can edit. View-only enforced by Row Level Security in Supabase.</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- App Shell -->
+  <div id="appShell" class="app-shell">
+    <aside class="sidebar">
+      <div class="side-head">
+        <div class="brand"><i>📒</i> RegisterBook <span style="font-weight:400;color:var(--muted);font-size:12px">Community</span></div>
+        <div class="brand-sub">Unlimited register books on one phone</div>
+        <div id="modeBadge" class="mode-badge mode-demo">Demo mode</div>
+      </div>
+
+      <div id="accountCard" class="account-card">
+        <!-- filled by auth.js / app.js -->
+        <img src="https://i.pravatar.cc/100?img=5" class="acct-avatar" alt="">
+        <div class="acct-info"><div class="acct-name">Mahi</div><div class="acct-email">mahi@registerbook.demo</div></div>
+      </div>
+
+      <div class="demo-switch">
+        <label>Demo — switch account to test sharing</label>
+        <select id="demoUserSelect" class="demo-select"></select>
+        <div class="help-text">This switcher is only in demo. Real login shows your Google name/photo. Test: create as <b>Goldfish</b>, share, switch to <b>Silverfish</b> — Silverfish can read & search but cannot edit.</div>
+      </div>
+
+      <nav class="nav">
+        <div class="nav-item active" data-view="home" onclick="setView('home')"><span class="ico">🏠</span> Home <span class="count" id="countHome">•</span></div>
+        <div class="nav-item" data-view="myRegisters" onclick="setView('myRegisters')"><span class="ico">📒</span> My Registers <span class="count" id="countMy">0</span></div>
+        <div class="nav-item" data-view="shared" onclick="setView('shared')"><span class="ico">👁️</span> Shared With Me <span class="count" id="countShared">0</span></div>
+        <div class="nav-item" data-view="people" onclick="setView('people')"><span class="ico">🧑‍🤝‍🧑</span> People & Friends <span class="count" id="countPeople"></span></div>
+        <div class="nav-item" data-view="groups" onclick="setView('groups')"><span class="ico">👥</span> Groups <span class="count" id="countGroups">0</span></div>
+        <div class="nav-item" data-view="chats" onclick="setView('chats')"><span class="ico">💬</span> Private Chats <span class="count" id="countChats"></span></div>
+        <button class="btn btn-primary" style="margin-top:8px" onclick="openCreateModal()">+ Create Register</button>
+      </nav>
+
+      <div class="side-foot">
+        <div><b>Today auto-filled:</b> <span id="todayPreview"></span></div>
+        <div class="mt8">Bill Book supports qty + ₹ amount with page total. 10 lines/page — auto next page, Previous/Next + go-to-page.</div>
+        <div class="mt8"><span id="pendingBadge" class="badge badge-amber"></span> <span class="muted">View-only sharing enforced in database, not just buttons.</span></div>
+      </div>
+    </aside>
+
+    <main class="main">
+      <div class="topbar">
+        <div>
+          <h1 id="topTitle">Community Home</h1>
+          <p id="topSub">Registers shared with you + your community</p>
+        </div>
+        <div class="topbar-actions">
+          <button class="btn btn-sm" onclick="enterDemo('goldfish')">Switch to Goldfish</button>
+          <button class="btn btn-sm" onclick="enterDemo('silverfish')">Switch to Silverfish</button>
+          <button class="btn btn-sm btn-ghost" onclick="handleSignOut()">Sign out</button>
+        </div>
+      </div>
+
+      <div class="content">
+        <!-- Views -->
+        <div id="view-home" class="view"></div>
+        <div id="view-myRegisters" class="view" style="display:none"></div>
+        <div id="view-shared" class="view" style="display:none"></div>
+        <div id="view-people" class="view" style="display:none"></div>
+        <div id="view-groups" class="view" style="display:none"></div>
+        <div id="view-chats" class="view" style="display:none"></div>
+        <div id="view-registerDetail" class="view" style="display:none"></div>
+      </div>
+    </main>
+  </div>
+
+  <!-- Create Register Modal -->
+  <div id="createModal" class="modal">
+    <div class="modal-card">
+      <div class="modal-head"><h3>Create Register</h3><button class="btn btn-sm" onclick="closeCreateModal()">✕</button></div>
+      <div class="modal-body">
+        <div class="form-row"><label>Register name</label><input id="newRegName" placeholder="e.g. Medicine Checklist — Ward A"></div>
+        <div class="form-row"><label>Type</label><select id="newRegType">
+          <option>Medical Checklist</option>
+          <option>Bill Book</option>
+          <option>Attendance Register</option>
+          <option>Stock Register</option>
+          <option>General Register</option>
+        </select></div>
+        <div class="note" id="newRegDatePreview" style="background:#ecfdf5;border:1px solid #a7f3d0;padding:8px 10px;border-radius:8px"></div>
+        <div class="row mt12"><button class="btn btn-primary" onclick="createRegister()">Create</button><button class="btn" onclick="closeCreateModal()">Cancel</button><span class="small muted">Unlimited pages — 10 lines per page, auto next page.</span></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Share Modal -->
+  <div id="shareModal" class="modal">
+    <div class="modal-card">
+      <div class="modal-head"><h3>Share register — view only</h3><button class="btn btn-sm" onclick="closeShareModal()">✕</button></div>
+      <div class="modal-body">
+        <input type="hidden" id="shareRegId">
+        <div class="small muted" style="margin-bottom:8px">Sharing: <b id="shareRegName"></b> — recipient can read every page & search, but cannot edit. Only creator can change.</div>
+        <div class="form-row"><label>Search person — suggestions appear</label>
+          <div style="position:relative"><input id="shareUserInput" placeholder="Type Goldfish, Priya..." autocomplete="off" oninput="handleShareUserInput(this.value)"><div id="shareSuggest" class="suggest-box" style="position:absolute;left:0;right:0;top:calc(100% + 6px);z-index:6"></div></div>
+          <div class="small muted">Click a suggestion to select. Ways: (a) search name → pick → share; (b) share to whole group; (c) share from private chat.</div>
+        </div>
+        <div class="form-row"><label>Or share to whole group at once</label><select id="shareGroupSelect"></select></div>
+        <div class="row"><button class="btn btn-primary" onclick="doShare()">Share view-only</button><button class="btn" onclick="closeShareModal()">Cancel</button></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Group Modal -->
+  <div id="groupModal" class="modal">
+    <div class="modal-card">
+      <div class="modal-head"><h3>Create Group</h3><button class="btn btn-sm" onclick="closeGroupModal()">✕</button></div>
+      <div class="modal-body">
+        <div class="form-row"><label>Group name</label><input id="newGroupName" placeholder="e.g. Ward Staff"></div>
+        <div class="form-row"><label>Add staff members</label><div id="newGroupMembers" style="max-height:180px;overflow:auto;border:1px solid var(--border);border-radius:8px;padding:8px"></div></div>
+        <div class="row"><button class="btn btn-primary" onclick="createGroup()">Create group</button><button class="btn" onclick="closeGroupModal()">Cancel</button></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Call Overlay -->
+  <div id="callOverlay" class="call-overlay">
+    <div class="call-card">
+      <img id="callAvatar" class="call-avatar" src="">
+      <div id="callName" class="call-name">—</div>
+      <div id="callStatus" class="call-status">Calling...</div>
+      <div class="demo-label">⚠️ Demo call screen — real calling (WebRTC) is not wired yet. Listed as next step — we never fake it silently.</div>
+      <div class="call-actions">
+        <button class="btn-call btn-mic" title="Mute (demo)">🎙️</button>
+        <button class="btn-call btn-end" onclick="endCall()">📞</button>
+      </div>
+      <div class="small" style="margin-top:10px;color:#94a3b8">Group & private chat work now. Real calling will use WebRTC + Supabase presence.</div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast"></div>
+
+  <script src="vendor/supabase.js"></script>
+  <script src="config.js"></script>
+  <script src="auth.js"></script>
+  <script src="app.js"></script>
+  <script>
+    // Fill today preview for sidebar
+    document.addEventListener("DOMContentLoaded", ()=>{
+      const el=document.getElementById("todayPreview");
+      if(el){
+        const d=new Date();
+        el.textContent=d.toLocaleDateString('en-US',{weekday:'long',year:'numeric',month:'long',day:'numeric'});
+      }
+      const dp=document.getElementById("newRegDatePreview");
+      if(dp){
+        const d=new Date();
+        dp.textContent=d.toLocaleDateString('en-US',{weekday:'long',year:'numeric',month:'long',day:'numeric'}) + " — auto-selected";
+      }
+    });
+  </script>
+</body>
+</html>
