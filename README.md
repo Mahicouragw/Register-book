@@ -39,21 +39,26 @@ config.js               public Supabase URL + publishable key (fill these in)
 vendor/supabase.js      Supabase JS v2.57.4, vendored locally (no CDN)
 supabase/migrations.sql tables rb_* + Row Level Security policies
 MASTER_PROMPT.md        the original build brief
-tests/demo.test.js      automated DOM tests (jsdom)
+tests/                  automated tests: demo UI, cloud driver, SQL + RLS (PGlite)
 ```
 
 ---
 
 ## Current status (important)
 
-- ✅ Frontend complete and tested in **demo mode** (see `npm test`).
-- ⏳ **Waiting for the new Supabase project.** The Supabase account connected to
-  Arena (`numbersareplaying-1136's projects`) currently contains only
-  `supabase-sky-umbrella` (inactive) and `Blind quiz` — there is **no RegisterBook
-  project** in it. Blind-Quiz is never touched.
-- When the project exists, the remaining steps are: put its URL + publishable key in
-  `config.js`, run `supabase/migrations.sql`, set the Auth URLs, enable the Google
-  provider, then test the cloud mode (including the RLS view-only test).
+- ✅ Front end complete: demo mode **and** the Supabase cloud path, covered by 19 automated tests.
+- ✅ `supabase/migrations.sql` verified on **real PostgreSQL 18**: 9 tables, RLS on, and every
+  non-owner write refused (see `TEST_REPORT.md`).
+- ⛔ **Waiting on a Supabase project to host it.** The connected account is a Vercel-managed
+  organisation (`vercel_icfg_SJB9o5VUc5rmLgQ8u3PEJNHY`) that currently holds only
+  `supabase-sky-umbrella` (INACTIVE, and restore is refused with 403) and `Blind quiz`
+  (never touched, per the project rules). Creating a new project is refused with
+  *“organisation member reached the free-project limit”*.
+
+  To finish, the owner needs to either connect a personal Supabase account to Arena,
+  free a project slot, or upgrade the plan. Then: put the URL + publishable key in
+  `config.js`, run `supabase/migrations.sql`, set the Auth URLs and enable the Google
+  provider, and the cloud mode is live.
 
 ---
 
