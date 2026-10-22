@@ -1,160 +1,197 @@
-// auth.js — Supabase Auth for RegisterBook
-// Never stores secrets — only publishable anon key from config.js
-let supa = null;
-let currentAuthUser = null;
+// auth.js — Supabase Auth (Google) for RegisterBook
+// Only the publishable (anon) key from config.js is used. No secrets here.
+(function () {
+  "use strict";
+  const cfg = window.RB_CONFIG || {};
+  let client = null;
+  let initError = "";
 
-function initSupabase() {
-  if (!window.RB_CONFIG || !window.RB_CONFIG.isConfigured()) {
-    console.warn("[Auth] Supabase not configured yet — demo mode only. Replace config.js values.");
-    return null;
+  function isConfigured() {
+    const url = String(cfg.SUPABASE_URL || "");
+    const key = String(cfg.SUPABASE_ANON_KEY || "");
+    return !!url && !!key && !/REPLACE/i.test(url) && !/REPLACE/i.test(key);
   }
-  if (supa) return supa;
-  try {
-    supa = window.supabase.createClient(window.RB_CONFIG.SUPABASE_URL, window.RB_CONFIG.SUPABASE_ANON_KEY);
-    return supa;
-  } catch (e) {
-    console.error("[Auth] Failed to create Supabase client", e);
-    return null;
+
+  function projectRef() {
+    try { return new URL(cfg.SUPABASE_URL).host.split(".")[0]; } catch (e) { return "<YOUR_PROJECT_REF>"; }
   }
-}
 
-async function refreshAuthUI() {
-  const gate = document.getElementById("loginGate");
-  const app = document.getElementById("appShell");
-  const card = document.getElementById("accountCard");
-  const googleBtn = document.getElementById("googleLoginBtn");
-  const authHint = document.getElementById("authHint");
-  const modeBadge = document.getElementById("modeBadge");
-
-  // If we have a real Supabase session, show real user
-  if (supa) {
-    const { data } = await supa.auth.getSession();
-    const session = data?.session;
-    if (session && session.user) {
-      currentAuthUser = session.user;
-      const meta = session.user.user_metadata || {};
-      card.innerHTML = `
-        <img src="${meta.avatar_url || meta.picture || 'https://i.pravatar.cc/100?u='+encodeURIComponent(session.user.email)}" class="acct-avatar" alt="">
-        <div class="acct-info">
-          <div class="acct-name">${escapeHtml(meta.full_name || meta.name || session.user.email.split('@')[0])} <span class="real-badge">Google ✓</span></div>
-          <div class="acct-email">${escapeHtml(session.user.email)}</div>
-        </div>
-        <button class="btn btn-sm btn-ghost" onclick="handleSignOut()">Sign out</button>
-      `;
-      modeBadge.textContent = "Real account";
-      modeBadge.className = "mode-badge mode-real";
-      if (gate) gate.style.display = "none";
-      if (app) app.style.display = "flex";
-      // Load Supabase data then render
-      if (typeof loadFromSupabase === "function") await loadFromSupabase(session.user);
-      if (typeof renderAll === "function") renderAll();
-      return;
+  function getClient() {
+    if (client) return client;
+    if (!isConfigured()) return null;
+    if (!window.supabase || typeof window.supabase.createClient !== "function") {
+      initError = "The bundled Supabase library (vendor/supabase.js) did not load.";
+      return null;
+    }
+    try {
+      client = window.supabase.createClient(cfg.SUPABASE_URL, cfg.SUPABASE_ANON_KEY, {
+        auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true }
+      });
+      return client;
+    } catch (e) {
+      initError = e && e.message ? e.message : String(e);
+      return null;
     }
   }
 
-  // Check demo session (localStorage)
-  const demoUserId = localStorage.getItem("rb_demo_user");
-  if (demoUserId && typeof getDemoUser === "function" && getDemoUser(demoUserId)) {
-    currentAuthUser = null;
-    const u = getDemoUser(demoUserId);
-    card.innerHTML = `
-      <img src="${u.avatar}" class="acct-avatar" alt="">
-      <div class="acct-info">
-        <div class="acct-name">${escapeHtml(u.name)} <span class="demo-badge">Demo</span></div>
-        <div class="acct-email">${escapeHtml(u.email)}</div>
-      </div>
-      <button class="btn btn-sm btn-ghost" onclick="exitDemo()">Exit demo</button>
-    `;
-    modeBadge.textContent = "Demo mode";
-    modeBadge.className = "mode-badge mode-demo";
-    if (gate) gate.style.display = "none";
-    if (app) app.style.display = "flex";
-    return;
+  function cleanUrl() {
+    try {
+      const base = window.location.origin + window.location.pathname;
+      window.history.replaceState(null, "", base);
+    } catch (e) { /* ignore */ }
   }
 
-  // Not logged in — show gate
-  currentAuthUser = null;
-  if (gate) gate.style.display = "flex";
-  if (app) app.style.display = "none";
-  if (authHint) {
-    if (!window.RB_CONFIG.isConfigured()) {
-      authHint.innerHTML = `⚠️ Google login not connected yet. Create your NEW Supabase project (name it <b>RegisterBook</b>), then tell the builder. Demo mode works now — click “Try the demo”.<br>
-      <details style="margin-top:6px"><summary>Setup steps (you do this)</summary>
-        <ol style="text-align:left;margin:6px 0 0 18px;line-height:1.5">
-          <li>Google Cloud Console → Create OAuth Client → Authorized redirect: <code>https://&lt;YOUR_NEW_REF&gt;.supabase.co/auth/v1/callback</code></li>
-          <li>JS origins: <code>https://mahicouragw.github.io</code> + your preview URL</li>
-          <li>Supabase Dashboard → Auth → Providers → Google → Enable → paste Client ID & Secret</li>
-          <li>Supabase Auth → URL Config → Site URL: <code>https://mahicouragw.github.io/Register-book/</code> → Add redirect allow-list: that URL + preview/localhost</li>
-        </ol>
-      </details>`;
-    } else {
-      authHint.textContent = "Sign in with Google to sync across phones. Or try demo — no account needed.";
+  function friendly(err) {
+    const raw = (err && (err.message || err.error_description || err.msg)) || String(err || "");
+    const code = (err && (err.code || err.error)) || "";
+    const all = (raw + " " + code).toLowerCase();
+    const ref = projectRef();
+    const providerUrl = `https://supabase.com/dashboard/project/${ref}/auth/providers`;
+
+    if (all.includes("provider is not enabled") || all.includes("unsupported provider") || all.includes("validation_failed")) {
+      return {
+        kind: "provider",
+        title: "Google sign-in isn't switched on in Supabase yet",
+        message: "Your site and database are ready, but the Google provider has not been enabled in the Supabase dashboard yet. Demo mode works right now.",
+        steps: [
+          `Open <a href="${providerUrl}" target="_blank" rel="noopener">Supabase → Authentication → Providers → Google</a>`,
+          "Turn on <b>Enable Sign in with Google</b>",
+          "Paste your Google <b>Client ID</b> and <b>Client Secret</b> (you create them in Google Cloud Console — the button below shows exactly how)"
+        ]
+      };
+    }
+    if (all.includes("redirect_uri_mismatch") || all.includes("redirect url") || all.includes("invalid redirect")) {
+      return {
+        kind: "redirect",
+        title: "The Google redirect address does not match",
+        message: `Google must allow exactly: <code>https://${ref}.supabase.co/auth/v1/callback</code>. Also add this site to Supabase → Authentication → URL Configuration.`,
+        steps: [
+          `Google Cloud Console → <a href="https://console.cloud.google.com/apis/credentials" target="_blank" rel="noopener">Credentials</a> → your Web OAuth client`,
+          `Authorized redirect URI: <code>https://${ref}.supabase.co/auth/v1/callback</code>`,
+          `Authorized JavaScript origin: <code>${window.location.origin}</code>`,
+          `Supabase → <a href="https://supabase.com/dashboard/project/${ref}/auth/url-configuration" target="_blank" rel="noopener">Authentication → URL Configuration</a> → add this page to Redirect URLs`
+        ]
+      };
+    }
+    if (all.includes("missing oauth secret") || all.includes("client secret") || all.includes("client id")) {
+      return {
+        kind: "secret",
+        title: "Google Client ID / Secret is missing in Supabase",
+        message: "Paste them yourself in the Supabase dashboard — never share the secret in chat.",
+        steps: [
+          `Create the OAuth client in <a href="https://console.cloud.google.com/apis/credentials" target="_blank" rel="noopener">Google Cloud Console → Credentials</a>`,
+          `Open <a href="${providerUrl}" target="_blank" rel="noopener">Supabase → Authentication → Providers → Google</a>`,
+          "Paste Client ID and Client Secret there, then Save"
+        ]
+      };
+    }
+    if (all.includes("access_denied")) {
+      return { kind: "cancelled", title: "Sign-in cancelled", message: "You closed the Google window before finishing. Tap “Continue with Google” again when ready." };
+    }
+    if (all.includes("invalid api key") || all.includes("no api key") || all.includes("api key")) {
+      return {
+        kind: "config",
+        title: "The Supabase publishable key looks wrong",
+        message: "Copy the Project URL and the publishable (anon) key from Supabase → Project Settings → API into config.js, then redeploy.",
+        steps: []
+      };
+    }
+    return { kind: "unknown", title: "Google sign-in could not start", message: raw || "Unknown error.", steps: [] };
+  }
+
+  function parseUrlError() {
+    let params = null;
+    if (window.location.hash && window.location.hash.length > 1) {
+      params = new URLSearchParams(window.location.hash.slice(1));
+    }
+    const search = new URLSearchParams(window.location.search || "");
+    const err = (params && params.get("error")) || search.get("error");
+    if (!err) return null;
+    const desc = (params && params.get("error_description")) || search.get("error_description") || "";
+    const code = (params && params.get("error_code")) || "";
+    cleanUrl();
+    return friendly({ message: desc || err, code: code || err });
+  }
+
+  async function getSession() {
+    const c = getClient();
+    if (!c) return null;
+    try {
+      const { data, error } = await c.auth.getSession();
+      if (error) return null;
+      return data.session || null;
+    } catch (e) { return null; }
+  }
+
+  async function signInGoogle() {
+    if (!isConfigured()) {
+      return {
+        ok: false,
+        error: {
+          kind: "not-configured",
+          title: "Google login is not connected yet",
+          message: "config.js still has placeholder values. Create the new RegisterBook Supabase project, paste its URL and publishable key into config.js, then Google sign-in starts working.",
+          steps: [
+            "Open <a href=\"https://supabase.com/dashboard\" target=\"_blank\" rel=\"noopener\">supabase.com/dashboard</a> and select your <b>RegisterBook</b> project (not Blind quiz)",
+            "Project Settings → API → copy <b>Project URL</b> and <b>publishable/anon key</b>",
+            "Send those two public values to me so I can put them in config.js",
+            "Then enable Google in Authentication → Providers (the page will show the exact clicks)"
+          ]
+        }
+      };
+    }
+    const c = getClient();
+    if (!c) {
+      return { ok: false, error: { kind: "lib", title: "Supabase library did not load", message: initError || "vendor/supabase.js is missing.", steps: [] } };
+    }
+    try {
+      const redirectTo = window.location.origin + window.location.pathname;
+      const { error } = await c.auth.signInWithOAuth({
+        provider: "google",
+        options: { redirectTo, queryParams: { prompt: "select_account" } }
+      });
+      if (error) return { ok: false, error: friendly(error) };
+      return { ok: true };
+    } catch (e) {
+      return { ok: false, error: friendly(e) };
     }
   }
-}
 
-async function handleGoogleLogin() {
-  const hint = document.getElementById("authHint");
-  if (!window.RB_CONFIG.isConfigured()) {
-    if (hint) hint.innerHTML = `Google login is not set up yet — config.js still has REPLACE placeholders. Create your NEW RegisterBook Supabase project and update config.js. For now use <b>Try the demo</b> below.`;
-    return;
+  async function signOut() {
+    const c = getClient();
+    if (c) {
+      try { await c.auth.signOut(); } catch (e) { /* ignore */ }
+    }
+    try { localStorage.removeItem("rb_demo_user"); } catch (e) {}
   }
-  initSupabase();
-  if (!supa) {
-    if (hint) hint.textContent = "Supabase client failed to init. Check config.js values.";
-    return;
-  }
-  const redirectTo = window.location.href.split("?")[0].split("#")[0];
-  const { error } = await supa.auth.signInWithOAuth({
-    provider: "google",
-    options: { redirectTo }
-  });
-  if (error) {
-    if (hint) hint.textContent = "Google login error: " + error.message;
-    console.error(error);
-  }
-}
 
-async function handleSignOut() {
-  if (supa) await supa.auth.signOut();
-  currentAuthUser = null;
-  localStorage.removeItem("rb_demo_user");
-  await refreshAuthUI();
-  // reload to clear state
-  if (typeof resetDemoView === "function") resetDemoView();
-}
-
-function enterDemo(userId) {
-  if (!userId) userId = "mahi";
-  localStorage.setItem("rb_demo_user", userId);
-  if (typeof ensureDemoData === "function") ensureDemoData();
-  refreshAuthUI().then(() => {
-    if (typeof renderAll === "function") renderAll();
-  });
-}
-
-function exitDemo() {
-  localStorage.removeItem("rb_demo_user");
-  refreshAuthUI();
-}
-
-function getCurrentAuthUser() { return currentAuthUser; }
-function getSupabase() { return supa || initSupabase(); }
-
-function escapeHtml(s) {
-  if (!s) return "";
-  return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-}
-
-// Init on load
-document.addEventListener("DOMContentLoaded", async () => {
-  initSupabase();
-  if (supa) {
-    supa.auth.onAuthStateChange(async (_event, _session) => {
-      await refreshAuthUI();
+  function onChange(cb) {
+    const c = getClient();
+    if (!c) return function () {};
+    const { data } = c.auth.onAuthStateChange((event, session) => {
+      setTimeout(() => cb(event, session), 0);
     });
-    // handle redirect callback params
+    return function () { if (data && data.subscription) data.subscription.unsubscribe(); };
   }
-  // small delay to let app.js define helpers
-  setTimeout(refreshAuthUI, 100);
-});
+
+  async function init() {
+    const urlError = parseUrlError();
+    const c = getClient();
+    if (!c) return { client: null, session: null, urlError };
+    const session = await getSession();
+    return { client: c, session, urlError };
+  }
+
+  window.RBAuth = {
+    isConfigured,
+    getClient,
+    getSession,
+    signInGoogle,
+    signOut,
+    onChange,
+    init,
+    friendly,
+    projectRef,
+    cleanUrl
+  };
+})();

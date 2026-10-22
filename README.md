@@ -1,69 +1,150 @@
-# RegisterBook Community
+# RegisterBook Community 📒
 
-**One phone holds unlimited register books.** Replace paper books (Medical Checklist, Bill Book, Attendance, Stock, General) with shared digital register books for staff community.
+**One phone holds unlimited register books.** Staff stop buying paper books for the
+medical checklist, bill book, attendance, stock — and use shared digital registers
+instead, with **view-only sharing** enforced by the database.
 
-Live: `https://mahicouragw.github.io/Register-book/` (enable GitHub Pages: Settings → Pages → Deploy from branch: `main`, root)
+- Permanent address: **https://mahicouragw.github.io/Register-book/**
+- Live preview during development: the Arena preview URL for this session.
 
-## What it does
-- **Create Register** — name + type. Today's date/month/year/weekday auto-filled (e.g. Thursday, October 23, 2026).
-- **Unlimited pages like a real book** — 10 lines per page. When full, next line shifts to new page (Page 1,2,3... unlimited) and tells you. Previous/Next + go-to-page.
-- **Bill Book** — qty + ₹ amount with page total.
-- **Smart search inside a register** — by page number, date, or month. Accepts "October", "oct", "10", "23 Oct", and misspellings like "octobr" (fuzzy). Shows suggestions like "October 1 — Page 1 • 2 lines"; click jumps to page and highlights that day. Owner can edit there.
-- **Sharing — view only (core story)** — Goldfish writes 20–30 pages and shares with Silverfish. Silverfish can read every page + search, but **cannot add/edit/delete** because Goldfish is owner. Enforced by Row Level Security in Supabase, not just hiding buttons. Sharing via: search name → suggestions → pick register → share; share to whole group; share from private chat.
-- **Community Home** — counts of my registers / shared with me / my groups + recent shared books.
-- **Groups** — create group, add staff, group messages, share register to whole group.
-- **Private Chat** — 1-to-1 messages + Call button (demo screen clearly labelled; real WebRTC listed as next step).
-- **People & Friends** — search people (suggestions as you type), send friend request, accept/decline, then share.
+---
 
-## Login
-- **Continue with Google** via Supabase Auth (Google provider). After login shows your Google name, email, photo, Sign out.
-- **Try the demo** — works offline with demo users: Mahi, Goldfish, Silverfish, Priya, Rahul, Anjali. Switch account in sidebar to test sharing.
+## What the app does
 
-## Demo test (Goldfish → Silverfish)
-1. On login gate click **Goldfish** chip (or sidebar switch to Goldfish)
-2. Open **Medicine Checklist — Ward A** (25 lines, 3 pages)
-3. Click **Share** → type "Silverfish" → pick → Share view-only
-4. Switch to **Silverfish** (sidebar dropdown)
-5. Go to **Shared With Me** → open the same book → verify: search "October" works, suggestions appear, but Add/Edit/Delete is blocked with banner "View only — Goldfish created this".
-6. Switch back to Goldfish → you can edit again.
+| Feature | How it works |
+|---|---|
+| **Google login** | Supabase Auth (Google provider). Shows your Google name, email and photo + Sign out. If Supabase or the Google provider is not set up yet, the button explains exactly what to click — it never crashes. |
+| **Try the demo** | Fully offline demo with six people: Mahi, Goldfish, Silverfish, Priya, Rahul, Anjali. Saved in `localStorage`; the sidebar switcher lets you test sharing as different people. |
+| **Create register** | Name + type: Medical Checklist, Bill Book, Attendance Register, Stock Register, General Register. Today's weekday, date, month and year are filled in automatically. |
+| **Unlimited pages** | 10 lines per page. When a page fills, the next line moves to a new page automatically and a toast tells you. Previous / Next and “Page # → Go”. |
+| **Bill Book** | Qty + ₹ amount per line, **page total** and **book total**. |
+| **Smart search inside a register** | Accepts page numbers (`page 2`), months (`October`, `oct`, `10`), dates (`23 Oct`), weekdays, and misspellings (`octobr`). Suggestions look like **“October 1 — Page 1 • 2 lines”**; tapping one jumps to that page and highlights that day. |
+| **Sharing — view only** | The creator can share with a person (name search → suggestions), with a whole group, or from a private chat. Recipients can read every page and search, but **cannot add/edit/delete** — enforced by Row Level Security in Postgres, not only hidden buttons. |
+| **Community home** | Counts of my registers / shared with me / my groups, recent shared books, and a short explanation of the view-only rule. |
+| **Groups** | Create a group, add staff, group chat (send/receive), share a register to everyone at once. |
+| **Private chat** | 1-to-1 messages + Call button. The call screen is **clearly labelled as a demo** — real WebRTC calling is listed as the next step, never faked. |
+| **People & friends** | Name search with suggestions as you type, send a friend request, the other person accepts/declines, then you can share registers. |
 
-## Tech
-- Frontend: `index.html`, `styles.css`, `app.js`, `auth.js`, `config.js`, `vendor/supabase.js` (v2.57.4 vendored, no CDN)
-- Backend: Supabase (new project, **not** Blind-Quiz). Tables with prefix `rb_` and RLS ON (see `supabase/migrations.sql`).
-- Storage: localStorage for demo; Supabase for real Google login (syncs my registers, shared, groups, chats, friends).
-
-## Supabase setup (owner does these)
-### 1. Create new Supabase project
-- https://supabase.com → New project → name **RegisterBook** (not Blind quiz). Copy **Project URL** and **anon public key** (Settings → API).
-
-### 2. Update `config.js`
-- Replace `SUPABASE_URL` and `SUPABASE_ANON_KEY` with the new values. Commit & push.
-
-### 3. Run database migration
-- Supabase Dashboard → SQL Editor → paste `supabase/migrations.sql` → Run. This creates `rb_*` tables and RLS policies (owners can edit, shared can SELECT only).
-
-### 4. Auth settings
-- Supabase Dashboard → Authentication → URL Configuration → Site URL: `https://mahicouragw.github.io/Register-book/` → Redirect allow-list: add `https://mahicouragw.github.io/Register-book/**` plus your Arena preview URL and `http://localhost:8000/**` for testing.
-- Authentication → Providers → Google → Enable → paste **Client ID** and **Client Secret** (see next).
-
-### 5. Google Cloud Console (you do, never paste secret in chat)
-- https://console.cloud.google.com → Create project → APIs & Services → Credentials → Create OAuth client (Web):
-  - Authorized redirect URI: `https://<YOUR_NEW_PROJECT_REF>.supabase.co/auth/v1/callback`
-  - Authorized JS origins: `https://mahicouragw.github.io` and your Arena preview URL (shown in Live Preview).
-- Copy Client ID/Secret → paste into Supabase Google provider (step 4). Until done, login button shows friendly hint and Demo works.
-
-## GitHub Pages
-1. Push to `main`
-2. Repo → Settings → Pages → Build and deployment → **Deploy from branch** → branch `main`, folder `/ (root)` → Save
-3. Wait 1–2 min → visit `https://mahicouragw.github.io/Register-book/` → Should return HTTP 200, Google button visible, gate works, demo opens.
+---
 
 ## Files
-- `index.html` — app shell, sidebar, login gate, account card, demo switcher
-- `styles.css` — paper look (ruled lines, red margin), chat, call UI
-- `app.js` — full working prototype (localStorage + Supabase sync), 10 lines/page, fuzzy search, view-only sharing, groups, private chat, friend requests, demo call screen
-- `auth.js` + `config.js` — real Google sign-in via Supabase Auth
-- `vendor/supabase.js` — Supabase JS v2.57.4 vendored locally
+
+```
+index.html              app shell, login gate, sidebar, views, modals
+styles.css              paper look + phone-first responsive layout
+app.js                  all screens, register pages, smart search, chat, calls
+auth.js                 Supabase Auth (Google) + friendly error messages
+store.js                data layer: demo (localStorage) + cloud (Supabase) drivers
+config.js               public Supabase URL + publishable key (fill these in)
+vendor/supabase.js      Supabase JS v2.57.4, vendored locally (no CDN)
+supabase/migrations.sql tables rb_* + Row Level Security policies
+MASTER_PROMPT.md        the original build brief
+tests/demo.test.js      automated DOM tests (jsdom)
+```
+
+---
+
+## Current status (important)
+
+- ✅ Frontend complete and tested in **demo mode** (see `npm test`).
+- ⏳ **Waiting for the new Supabase project.** The Supabase account connected to
+  Arena (`numbersareplaying-1136's projects`) currently contains only
+  `supabase-sky-umbrella` (inactive) and `Blind quiz` — there is **no RegisterBook
+  project** in it. Blind-Quiz is never touched.
+- When the project exists, the remaining steps are: put its URL + publishable key in
+  `config.js`, run `supabase/migrations.sql`, set the Auth URLs, enable the Google
+  provider, then test the cloud mode (including the RLS view-only test).
+
+---
+
+## Run locally
+
+```bash
+python3 -m http.server 8000 --bind 0.0.0.0
+# then open http://localhost:8000/  (or the Arena preview URL)
+```
+
+## Run the automated tests
+
+```bash
+npm install      # once — installs jsdom
+npm test
+```
+
+The tests boot the real `index.html` in a DOM and check: the login gate, demo
+login, register creation with auto date, 10 lines per page + automatic page shift,
+fuzzy month search (“octobr”), page search, the **Goldfish → Silverfish view-only
+story** (owner can edit, viewer cannot), groups + group chat + group share,
+friend requests, private chat, the demo call label, and Bill Book totals.
+
+---
+
+## Supabase setup (owner does this)
+
+### 1. Find or create the new project
+- https://supabase.com/dashboard → the project named **RegisterBook**
+  (never “Blind quiz”, ref `zchircgdkyjnowqcdwvf`).
+- Copy **Project URL** and the **publishable / anon key** from
+  Project Settings → API. Both are public and safe to share.
+
+### 2. Put the two public values in `config.js`
+```js
+SUPABASE_URL: "https://<your-ref>.supabase.co",
+SUPABASE_ANON_KEY: "<publishable key>",
+```
+Never put a `service_role` / secret key in this file or in Git.
+
+### 3. Create the tables and security rules
+- Supabase → **SQL Editor** → paste all of `supabase/migrations.sql` → **Run**.
+- It creates the `rb_*` tables, enables RLS on all of them, adds the helper
+  functions and the profile-on-signup trigger. The final query should list
+  **9 tables, all with `rowsecurity = true`**.
+
+### 4. Auth URLs
+- Supabase → Authentication → **URL Configuration**
+  - Site URL: `https://mahicouragw.github.io/Register-book/`
+  - Redirect URLs: add
+    - `https://mahicouragw.github.io/Register-book/`
+    - `https://mahicouragw.github.io/Register-book/**`
+    - your Arena preview URL (from the Live Preview panel)
+    - `http://localhost:8000/**` if you test locally
+- Authentication → **Providers → Google** → Enable → paste Client ID + Client
+  Secret (you paste these yourself; never in chat).
+
+### 5. Google Cloud Console
+- https://console.cloud.google.com/apis/credentials → **Create credentials →
+  OAuth client ID → Web application**
+  - Authorized JavaScript origins:
+    `https://mahicouragw.github.io` and your preview URL
+  - Authorized redirect URI:
+    `https://<your-project-ref>.supabase.co/auth/v1/callback`
+- Copy the Client ID and Secret into the Supabase Google provider page.
+
+Until step 4/5 is finished, “Continue with Google” shows a friendly,
+step-by-step message and the demo keeps working.
+
+---
+
+## GitHub Pages
+
+1. Settings → Pages: https://github.com/Mahicouragw/Register-book/settings/pages
+2. **Deploy from a branch** → branch `main` → folder `/ (root)` → Save.
+3. After 1–2 minutes: https://mahicouragw.github.io/Register-book/
+
+---
+
+## Privacy / security notes
+
+- Browser code only contains the **publishable** Supabase key.
+- All `rb_*` tables have RLS enabled. Signed-out visitors have no grants at all.
+- Writes to registers and entries are allowed only when
+  `rb_owns_register(...)` is true; shared readers only ever get `SELECT`.
+- Google profile data (name, email, photo) is stored only in `rb_profiles`, used
+  to show names in search and sharing.
 
 ## Next step for real calling
-- WebRTC with Supabase Realtime presence. Current Call button shows demo screen labelled as demo and lists real calling as next step — never faked silently.
 
+Group and private chat work today. The Call button opens a screen that says
+**“Demo call screen — real audio/video calling (WebRTC) is not connected yet.”**
+Real calling needs WebRTC plus Supabase Realtime signalling — that is the next
+feature, and it is intentionally not faked.
