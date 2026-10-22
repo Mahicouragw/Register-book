@@ -44,21 +44,22 @@ tests/                  automated tests: demo UI, cloud driver, SQL + RLS (PGlit
 
 ---
 
-## Current status (important)
+## Current status
 
-- ✅ Front end complete: demo mode **and** the Supabase cloud path, covered by 19 automated tests.
-- ✅ `supabase/migrations.sql` verified on **real PostgreSQL 18**: 9 tables, RLS on, and every
-  non-owner write refused (see `TEST_REPORT.md`).
-- ⛔ **Waiting on a Supabase project to host it.** The connected account is a Vercel-managed
-  organisation (`vercel_icfg_SJB9o5VUc5rmLgQ8u3PEJNHY`) that currently holds only
-  `supabase-sky-umbrella` (INACTIVE, and restore is refused with 403) and `Blind quiz`
-  (never touched, per the project rules). Creating a new project is refused with
-  *“organisation member reached the free-project limit”*.
+**Connected to the live project:** `RegisterBook` · ref **`tmkpdvljhnlnvbckbnsc`** · Mumbai (`ap-south-1`).
 
-  To finish, the owner needs to either connect a personal Supabase account to Arena,
-  free a project slot, or upgrade the plan. Then: put the URL + publishable key in
-  `config.js`, run `supabase/migrations.sql`, set the Auth URLs and enable the Google
-  provider, and the cloud mode is live.
+| Piece | Status |
+|---|---|
+| `config.js` (Project URL + **publishable** key only) | ✅ done |
+| `supabase/migrations.sql` applied (9 `rb_*` tables, RLS on, 30 policies, signup trigger) | ✅ verified in the project |
+| Auth Site URL `https://mahicouragw.github.io/Register-book/` + redirect allow-list | ✅ set |
+| Signup enabled | ✅ |
+| Google provider (Client ID + Secret) | ⏳ **owner step** — the app shows the exact clicks until it is done |
+| GitHub Pages | ⏳ after this PR is merged |
+
+Verified on the live database with three simulated users: owner writes, shared user reads but
+`INSERT` is rejected (`42501`) and `UPDATE`/`DELETE` change 0 rows, outsiders see nothing
+(transaction rolled back, project left empty). See `TEST_REPORT.md`.
 
 ---
 

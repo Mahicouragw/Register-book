@@ -7,9 +7,9 @@ const path = require("path");
 const { JSDOM } = require("jsdom");
 
 const ROOT = path.join(__dirname, "..");
-const APP_FILES = ["config.js", "auth.js", "store.js", "app.js"];
 
-function loadApp() {
+function loadApp(opts) {
+  const options = opts || {};
   const html = fs.readFileSync(path.join(ROOT, "index.html"), "utf8");
   const dom = new JSDOM(html, {
     url: "https://rb.test/Register-book/",
@@ -17,11 +17,23 @@ function loadApp() {
     pretendToBeVisual: true
   });
   const w = dom.window;
-  w.supabase = { createClient() { return null; } }; // vendor bundle stub (config is unconfigured in tests)
+  w.supabase = { createClient() { return null; } }; // vendor bundle stub
   w.HTMLElement.prototype.scrollIntoView = function () {};
   w.confirm = () => true;
   w.prompt = () => "Edited by test";
-  APP_FILES.forEach(f => w.eval(fs.readFileSync(path.join(ROOT, f), "utf8")));
+  // Unless asked otherwise, these UI tests run with the "not configured yet" state
+  // (the configured/Google paths have their own suite in auth-config.test.js).
+  w.eval(fs.readFileSync(path.join(ROOT, "config.js"), "utf8"));
+  if (!options.configured) {
+    w.RB_CONFIG = {
+      SUPABASE_URL: "https://REPLACE_WITH_NEW_REGISTERBOOK_URL.supabase.co",
+      SUPABASE_ANON_KEY: "REPLACE_WITH_NEW_ANON_KEY",
+      SITE_URL: "https://mahicouragw.github.io/Register-book/",
+      isConfigured() { return false; },
+      projectRef() { return ""; }
+    };
+  }
+  ["auth.js", "store.js", "app.js"].forEach(f => w.eval(fs.readFileSync(path.join(ROOT, f), "utf8")));
   return { dom, w, doc: w.document };
 }
 const tick = (ms = 0) => new Promise(r => setTimeout(r, ms));

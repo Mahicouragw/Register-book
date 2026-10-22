@@ -73,20 +73,63 @@ between JS and SQL fail the test).
 | Real script load over HTTP incl. vendored Supabase JS v2.57.4 (`createClient` is a function) | ✅ |
 | Gate visible + demo opens when served over HTTP | ✅ |
 
-## 5. Blocked on the Supabase project
+## 5. Live Supabase project tests (real, not mocked)
 
-The connected Supabase account is a **Vercel-managed organisation**
-(`vercel_icfg_SJB9o5VUc5rmLgQ8u3PEJNHY`) containing only
-`supabase-sky-umbrella` (INACTIVE) and `Blind quiz` (never touched):
+Project **`RegisterBook`** · ref `tmkpdvljhnlnvbckbnsc` (Mumbai, `ap-south-1`), created for this app.
+Blind-Quiz was never touched.
 
-- ❌ `create_project` → Supabase: *“organisation member reached the free-project limit”*
-- ❌ `restore_project` on `supabase-sky-umbrella` → **403** (token cannot control that project)
+### Structural verification (via the Supabase tools)
 
-So these still need the real project:
+| Check | Result |
+|---|---|
+| `pg_tables` for `rb\_%` | ✅ **9 tables, `rowsecurity = true` on all** |
+| `pg_policies` | ✅ **30 policies** (profiles 3, registers 4, entries 4, shares 3, groups 4, group members 3, group messages 3, friend requests 4, direct messages 3) |
+| Columns per table vs what the app selects/inserts | ✅ exact match |
+| Helper functions exist and are `SECURITY DEFINER` | ✅ `rb_owns_register`, `rb_can_read_register`, `rb_is_group_member`, `rb_is_group_creator` |
+| Signup trigger `rb_auth_user_created` on `auth.users` | ✅ present |
+| Table grants: `anon` | ✅ **none** (signed-out visitors get nothing) |
+| Table grants: `authenticated` | ✅ select/insert/update/delete (RLS decides rows) |
+| Auth config | ✅ Site URL `https://mahicouragw.github.io/Register-book/`, allow-list with GitHub Pages + `/**` + localhost, signup enabled |
 
-- Google OAuth end-to-end (also needs the Google Client ID/Secret the owner pastes).
-- Two-device cloud sync.
-- RLS check against the live Supabase database (already proven locally on PostgreSQL 18).
-- Auth URL configuration, GitHub Pages verification after merge.
+### Behavioural test on the live database (11 checks, rolled back)
 
-They will be added here once the project is connected.
+Simulated three Google users inside a transaction (`set local role authenticated` +
+`request.jwt.claim.sub`), then rolled back:
+
+| # | Check | Result |
+|---|---|---|
+| 1 | Signup trigger creates profiles for new users | ✅ 3 of 3 |
+| 2 | Goldfish (owner) writes a register + 2 lines | ✅ 2 lines |
+| 3 | Goldfish shares view-only with Silverfish | ✅ |
+| 4 | Silverfish sees the shared register | ✅ 1 |
+| 5 | Silverfish sees its lines | ✅ 2 |
+| 6 | **Silverfish UPDATE** | ✅ **0 rows changed** |
+| 7 | **Silverfish DELETE** | ✅ **0 rows deleted** |
+| 8 | **Silverfish INSERT** | ✅ **BLOCKED by RLS (SQLSTATE 42501)** |
+| 9 | Priya (outsider) sees registers | ✅ 0 |
+| 10 | Priya sees lines | ✅ 0 |
+| 11 | Owner's lines after the attack | ✅ `Paracetamol,Insulin` (unchanged) |
+| — | After rollback: users / profiles / registers / entries / shares | ✅ 0 / 0 / 0 / 0 / 0 (project left clean) |
+
+### Auth behaviour with the real project (7 automated tests)
+
+| # | Test | Result |
+|---|---|---|
+| 1 | `config.js` has the real URL + a `sb_publishable_…` key and **no** JWT/secret literals | ✅ |
+| 2 | Gate reports the project as connected | ✅ |
+| 3 | Google provider still off → friendly click-by-click message with the exact redirect URI, **no JSON error page, no navigation** | ✅ |
+| 4 | Google provider on → OAuth redirect starts with `redirect_to=https://mahicouragw.github.io/Register-book/` | ✅ |
+| 5 | Provider probe blocked/offline → sign-in still attempts the redirect | ✅ |
+| 6 | Demo mode still works with the real config present | ✅ |
+| 7 | No session → gate shown (no fake login) | ✅ |
+
+### Still to do (needs the owner / the merge)
+
+- **Google provider**: owner creates a Web OAuth client in Google Cloud and pastes Client ID +
+  Secret into Supabase → Providers → Google. Until then the app explains the steps.
+- **Real Google login and two-device sync**: must be clicked by the owner after that step.
+- **GitHub Pages**: only after this PR is merged.
+
+> Note: the coding sandbox can only reach github.com / npm / pypi, so the browser-side network
+> calls to `*.supabase.co` cannot be exercised from here; the database itself was verified through
+> the Supabase API instead.

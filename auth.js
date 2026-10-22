@@ -144,6 +144,35 @@
     if (!c) {
       return { ok: false, error: { kind: "lib", title: "Supabase library did not load", message: initError || "vendor/supabase.js is missing.", steps: [] } };
     }
+    // Ask Supabase which providers are enabled. If Google is off, show the exact
+    // steps instead of navigating the phone to a raw JSON error page.
+    try {
+      const base = String(cfg.SUPABASE_URL).replace(/\/$/, "");
+      const res = await fetch(base + "/auth/v1/settings", {
+        headers: { apikey: String(cfg.SUPABASE_ANON_KEY || "") }
+      });
+      if (res && res.ok) {
+        const settings = await res.json();
+        const external = (settings && settings.external) || {};
+        if (external.google === false) {
+          return {
+            ok: false,
+            error: {
+              kind: "provider",
+              title: "Google sign-in is not switched on yet",
+              message: "Your Supabase project and database are connected ✓ — only the Google provider is still off. Demo mode works right now.",
+              steps: [
+                `Create the OAuth client in <a href="https://console.cloud.google.com/apis/credentials" target="_blank" rel="noopener">Google Cloud Console → Credentials</a> (Web application). Redirect URI: <code>https://${projectRef()}.supabase.co/auth/v1/callback</code>`,
+                `Open <a href="https://supabase.com/dashboard/project/${projectRef()}/auth/providers" target="_blank" rel="noopener">Supabase → Authentication → Providers → Google</a> and turn it <b>on</b>`,
+                "Paste the Client ID and Client Secret there (only in the Supabase dashboard) and press Save",
+                "Come back and tap “Continue with Google” again"
+              ]
+            }
+          };
+        }
+      }
+    } catch (e) { /* offline / blocked — fall through to the normal redirect */ }
+
     try {
       const redirectTo = window.location.origin + window.location.pathname;
       const { error } = await c.auth.signInWithOAuth({

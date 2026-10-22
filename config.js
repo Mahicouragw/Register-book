@@ -8,11 +8,12 @@
 // NEVER put a service_role / secret key in this file, in Git, or in chat.
 // Do NOT use the Blind-Quiz project (zchircgdkyjnowqcdwvf).
 //
+// Project: "RegisterBook" (ref tmkpdvljhnlnvbckbnsc, Mumbai ap-south-1).
 // While the values below still contain REPLACE, Google login shows a friendly
 // "not connected yet" message and the full demo mode keeps working.
 window.RB_CONFIG = {
-  SUPABASE_URL: "https://REPLACE_WITH_NEW_REGISTERBOOK_URL.supabase.co",
-  SUPABASE_ANON_KEY: "REPLACE_WITH_NEW_ANON_KEY",
+  SUPABASE_URL: "https://tmkpdvljhnlnvbckbnsc.supabase.co",
+  SUPABASE_ANON_KEY: "sb_publishable_A1EprlCSXwkWPY7Aboww5A_DuTSoJ9x",
 
   // Where the app lives (used in the setup instructions shown in the app)
   SITE_URL: "https://mahicouragw.github.io/Register-book/",
