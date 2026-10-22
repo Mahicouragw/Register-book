@@ -1513,8 +1513,76 @@
           <div class="small muted">After merging, open <a href="https://github.com/Mahicouragw/Register-book/settings/pages" target="_blank" rel="noopener">Settings → Pages</a> → <b>Deploy from a branch</b> → <code>main</code> → <code>/ (root)</code> → Save. The site is then at <a href="${esc(siteUrl)}" target="_blank" rel="noopener">${esc(siteUrl)}</a>.</div>
         </li>
       </ol>
-      <div class="small muted">Rule of thumb: the <b>publishable/anon</b> key is public and may live in <code>config.js</code>. The <b>service_role</b> key and the Google <b>Client Secret</b> must only ever be pasted into the Supabase dashboard.</div>`;
+      <div class="card" style="border:1px solid var(--border);border-radius:10px;padding:12px;margin-top:6px">
+        <div class="strong">Connection check</div>
+        <div class="small muted">Tests this phone's link to Supabase and tells you exactly what is missing.</div>
+        <button class="btn btn-sm btn-primary mt8" onclick="runDiagnostics()">Run connection check</button>
+        <div id="diagBox" class="mt8"></div>
+      </div>
+      <div class="small muted mt12">Rule of thumb: the <b>publishable/anon</b> key is public and may live in <code>config.js</code>. The <b>service_role</b> key and the Google <b>Client Secret</b> must only ever be pasted into the Supabase dashboard.</div>`;
     modal.classList.add("open");
+  }
+  async function runDiagnostics() {
+    const box = $("#diagBox");
+    if (!box) return;
+    box.innerHTML = '<div class="small muted">Checking…</div>';
+    const cfg = window.RB_CONFIG || {};
+    const lines = [];
+    const ok = t => lines.push("PASS  " + t);
+    const bad = t => lines.push("FAIL  " + t);
+
+    if (cfg.isConfigured && cfg.isConfigured()) ok("config.js: project URL + publishable key are set");
+    else bad("config.js: still has REPLACE placeholders");
+
+    const base = String(cfg.SUPABASE_URL || "").replace(/\/$/, "");
+    const key = String(cfg.SUPABASE_ANON_KEY || "");
+    lines.push("Project: " + (base || "(none)"));
+    lines.push("This page: " + window.location.origin + window.location.pathname);
+
+    if (base) {
+      try {
+        const res = await fetch(base + "/auth/v1/settings", { headers: { apikey: key } });
+        if (res && res.ok) {
+          const st = await res.json();
+          const google = st && st.external ? st.external.google : undefined;
+          if (google === true) ok("Supabase auth reachable — Google provider is ON");
+          else if (google === false) bad("Supabase auth reachable — Google provider is OFF (Supabase → Authentication → Providers → Google → Enable → Save)");
+          else lines.push("WARN  Supabase auth reachable, provider list not understood");
+        } else {
+          bad("Supabase auth returned HTTP " + (res ? res.status : "?"));
+        }
+      } catch (e) {
+        bad("Cannot reach " + base + " from this browser (" + (e && e.message ? e.message : "network") + ")");
+      }
+      try {
+        const res2 = await fetch(base + "/rest/v1/rb_profiles?select=id&limit=1", {
+          headers: { apikey: key, Authorization: "Bearer " + key }
+        });
+        if (res2 && (res2.status === 401 || res2.status === 403)) {
+          ok("Database reachable and locked to signed-out visitors (correct)");
+        } else if (res2 && res2.ok) {
+          const rows = await res2.json();
+          ok("Database reachable — rb_profiles answered (" + (Array.isArray(rows) ? rows.length : 0) + " rows visible while signed out, 0 expected)");
+        } else if (res2 && res2.status === 404) {
+          bad("Table rb_profiles not found — run supabase/migrations.sql in the SQL Editor");
+        } else {
+          bad("Database check returned HTTP " + (res2 ? res2.status : "?"));
+        }
+      } catch (e) {
+        bad("Database check failed (" + (e && e.message ? e.message : "network") + ")");
+      }
+    }
+
+    lines.push("Google redirect URI: https://" + (cfg.projectRef ? cfg.projectRef() : "…") + ".supabase.co/auth/v1/callback");
+    lines.push("Signed in as: " + (S.me ? S.me.name + (S.isDemo() ? " (demo mode)" : " (Google)") : "nobody"));
+    if (S.setupError) bad("Database error: " + S.setupError);
+
+    const failed = lines.filter(l => l.startsWith("FAIL")).length;
+    const head = failed
+      ? `<div class="gate-hint err" style="margin:0 0 8px"><b>${failed} thing${failed > 1 ? "s" : ""} need${failed > 1 ? "" : "s"} fixing</b> — see FAIL lines below.</div>`
+      : `<div class="gate-hint ok" style="margin:0 0 8px"><b>Everything checks out ✓</b> — tap Continue with Google.</div>`;
+    box.innerHTML = head + `<pre class="diag">${esc(lines.join("\n"))}</pre>` +
+      `<button class="btn btn-sm mt8" onclick="copyText(document.querySelector('.diag').textContent, 'Check report')">Copy report</button>`;
   }
   function closeSetupModal() {
     const modal = $("#setupModal");
@@ -1663,7 +1731,7 @@
     handleGoogleLogin, handleSignOut, enterDemo, demoStory,
     handleFriend: respondFriend,
     toast, toggleSidebar, manualRefresh,
-    openSetupModal, closeSetupModal, copyText
+    openSetupModal, closeSetupModal, copyText, runDiagnostics
   });
 
   // small aliases used by inline handlers in older docs

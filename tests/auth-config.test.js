@@ -19,9 +19,12 @@ function boot({ googleEnabled, fetchFails = false, realConfig = true }) {
   w.fetch = async (url) => {
     if (fetchFails) throw new Error("network blocked");
     if (String(url).includes("/auth/v1/settings")) {
-      return { ok: true, json: async () => ({ external: { google: !!googleEnabled, email: true } }) };
+      return { ok: true, status: 200, json: async () => ({ external: { google: !!googleEnabled, email: true } }) };
     }
-    return { ok: true, json: async () => ({}) };
+    if (String(url).includes("/rest/v1/")) {
+      return { ok: false, status: 401, json: async () => ({ message: "permission denied" }) };
+    }
+    return { ok: true, status: 200, json: async () => ({}) };
   };
   // minimal supabase client stub
   w.supabase = {
@@ -119,6 +122,46 @@ test("demo still works with the real config present", async () => {
   assert.equal(w.RBStore.isDemo(), true);
   assert.equal(doc.getElementById("appShell").classList.contains("show"), true);
   assert.match(doc.getElementById("accountCard").textContent, /Goldfish/);
+  dom.window.close();
+});
+
+test("connection check: reports the Google provider as OFF and the DB as locked", async () => {
+  const { dom, w, doc } = boot({ googleEnabled: false });
+  await w.__RB.boot();
+  w.openSetupModal();
+  await w.runDiagnostics();
+  await tick(20);
+  const report = doc.querySelector("#diagBox .diag").textContent;
+  assert.match(report, /PASS {2}config\.js/);
+  assert.match(report, /FAIL {2}.*Google provider is OFF/, "provider OFF is reported");
+  assert.match(report, /PASS {2}Database reachable and locked/, "anon access blocked is reported as correct");
+  assert.match(report, /auth\/v1\/callback/, "exact redirect URI included");
+  assert.match(doc.getElementById("diagBox").textContent, /1 thing needs fixing/);
+  dom.window.close();
+});
+
+test("connection check: all green when the provider is ON", async () => {
+  const { dom, w, doc } = boot({ googleEnabled: true });
+  await w.__RB.boot();
+  w.openSetupModal();
+  await w.runDiagnostics();
+  await tick(20);
+  const report = doc.querySelector("#diagBox .diag").textContent;
+  assert.match(report, /PASS {2}Supabase auth reachable — Google provider is ON/);
+  assert.doesNotMatch(report, /FAIL/);
+  assert.match(doc.getElementById("diagBox").textContent, /Everything checks out/);
+  dom.window.close();
+});
+
+test("connection check: unreachable network is reported clearly", async () => {
+  const { dom, w, doc } = boot({ googleEnabled: false, fetchFails: true });
+  await w.__RB.boot();
+  w.openSetupModal();
+  await w.runDiagnostics();
+  await tick(20);
+  const report = doc.querySelector("#diagBox .diag").textContent;
+  assert.match(report, /FAIL {2}Cannot reach .* from this browser/);
+  assert.match(report, /FAIL {2}Database check failed/);
   dom.window.close();
 });
 
