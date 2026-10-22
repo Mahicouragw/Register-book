@@ -27,6 +27,7 @@
 
       <div class="demo-chips" id="gateDemoChips"></div>
 
+      <div class="gate-foot" style="margin-top:10px"><button class="btn btn-sm btn-ghost" onclick="openSetupModal()">🔧 Owner setup guide — Google &amp; Supabase steps</button></div>
       <div class="gate-foot">
         Staff have to buy many expensive paper books — Medical Checklist, Bill Book, Attendance, Stock… This app replaces them with shared digital books.<br>
         <span class="muted">Only the creator can edit. View-only access is enforced by Row Level Security in the database, not just by hiding buttons.</span>
@@ -75,6 +76,7 @@
         <div><b>Today, auto-filled:</b> <span id="todayPreview"></span></div>
         <div class="mt8">10 lines per page. When a page fills, the next line moves to a new page automatically.</div>
         <div id="demoResetWrap" class="mt8"><button class="btn btn-sm btn-ghost" onclick="confirmDemoReset()">↺ Reset demo data</button></div>
+        <div class="mt8"><button class="btn btn-sm btn-ghost" onclick="openSetupModal()">🔧 Owner setup guide</button></div>
       </div>
     </aside>
 
@@ -167,6 +169,17 @@
           <div class="suggest-wrap"><input id="addMemberInput" placeholder="Type a name…" autocomplete="off" oninput="handleAddMemberSearch(this.value)"><div id="addMemberSuggest" class="suggest-box"></div></div>
         </div>
         <div id="addMemberList" class="member-picker"></div>
+      </div>
+    </div>
+  </div>
+
+  <div id="setupModal" class="modal" role="dialog" aria-modal="true" aria-labelledby="setupModalTitle">
+    <div class="modal-card">
+      <div class="modal-head"><h3 id="setupModalTitle">Owner setup guide</h3><button class="btn btn-sm" onclick="closeSetupModal()" aria-label="Close">✕</button></div>
+      <div class="modal-body">
+        <div id="setupStatus"></div>
+        <div id="setupBody"></div>
+        <div class="row mt12"><button class="btn btn-primary" onclick="closeSetupModal()">Done</button><button class="btn" onclick="openSetupModal()">↻ Refresh status</button></div>
       </div>
     </div>
   </div>

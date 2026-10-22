@@ -242,7 +242,9 @@ async function bootCloud(userId, seed = {}) {
     onChange: () => () => {},
     signInGoogle: async () => ({ ok: true }),
     signOut: async () => {},
-    init: async () => ({ client: mock.client, session: null, urlError: null })
+    init: async () => ({ client: mock.client, session: null, urlError: null }),
+    projectRef: () => "abcdefghijkl",
+    friendly: e => ({ title: "Error", message: String(e && e.message || e), steps: [] })
   };
   w.eval(fs.readFileSync(path.join(ROOT, "store.js"), "utf8"));
   w.eval(fs.readFileSync(path.join(ROOT, "app.js"), "utf8"));
@@ -319,6 +321,17 @@ test("cloud mode: friendly message when the tables have not been created yet", a
   assert.equal(res, false, "initCloud reports the schema problem instead of pretending");
   assert.match(w.RBStore.setupError, /tables are not created yet/i);
   assert.match(w.RBStore.setupError, /migrations\.sql|SQL Editor/i);
+  dom.window.close();
+});
+
+test("setup guide shows the real project ref and redirect URI when configured", async () => {
+  const { dom, w, doc } = await bootCloud(GOLD, seedRows());
+  w.openSetupModal();
+  const text = doc.getElementById("setupBody").textContent;
+  assert.match(text, /abcdefghijkl/, "project ref parsed from the configured URL");
+  assert.match(text, /https:\/\/abcdefghijkl\.supabase\.co\/auth\/v1\/callback/, "exact Google redirect URI");
+  assert.match(text, /https:\/\/rb\.test/, "this page URL for the redirect allow-list");
+  assert.match(doc.getElementById("setupStatus").textContent, /configured/i);
   dom.window.close();
 });
 

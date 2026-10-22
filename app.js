@@ -1427,6 +1427,100 @@
     toast("Call ended — this was a demo screen. Real WebRTC calling is the next step.");
   }
 
+  // ---------------------------------------------------------------- owner setup guide
+  function copyText(text, label) {
+    const done = () => toast((label || "Copied") + " ✓");
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(done, () => fallbackCopy(text, done));
+        return;
+      }
+    } catch (e) { /* fall through */ }
+    fallbackCopy(text, done);
+  }
+  function fallbackCopy(text, done) {
+    try {
+      const ta = document.createElement("textarea");
+      ta.value = text;
+      ta.style.position = "fixed";
+      ta.style.opacity = "0";
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand("copy");
+      ta.remove();
+      done();
+    } catch (e) { toast("Copy not allowed — select the text manually"); }
+  }
+  function copyRow(label, value) {
+    return `<div class="copy-row">
+      <div class="copy-label">${esc(label)}</div>
+      <div class="copy-value">${esc(value)}</div>
+      <button class="btn btn-sm" onclick="copyText('${esc(value).replace(/'/g, "\\'")}', '${esc(label)}')">Copy</button>
+    </div>`;
+  }
+  function openSetupModal() {
+    const modal = $("#setupModal");
+    if (!modal) return;
+    const configured = !!(window.RBAuth && window.RBAuth.isConfigured());
+    const ref = configured && window.RBAuth.projectRef ? window.RBAuth.projectRef() : "<your-project-ref>";
+    const origin = window.location.origin;
+    const pageUrl = origin + window.location.pathname;
+    const siteUrl = (window.RB_CONFIG && window.RB_CONFIG.SITE_URL) || "https://mahicouragw.github.io/Register-book/";
+    const redirectUri = `https://${ref}.supabase.co/auth/v1/callback`;
+
+    const status = $("#setupStatus");
+    if (status) {
+      status.innerHTML = configured
+        ? `<div class="gate-hint ok"><span class="hint-title">Supabase is configured ✓</span>
+            Project ref <code>${esc(ref)}</code> · mode: <b>${S.isDemo() ? "demo (sign in with Google for cloud)" : "Google account"}</b>.
+            ${S.setupError ? `<div class="mt8" style="color:#991b1b">${esc(S.setupError)}</div>` : ""}</div>`
+        : `<div class="gate-hint err"><span class="hint-title">Supabase is not connected yet</span>
+            config.js still has REPLACE placeholders. Google sign-in shows a friendly message; demo mode works fully.</div>`;
+    }
+
+    const body = $("#setupBody");
+    if (!body) return;
+    body.innerHTML = `
+      <ol class="setup-steps">
+        <li>
+          <b>Project URL + publishable key → <code>config.js</code></b>
+          <div class="small muted">Open <a href="https://supabase.com/dashboard/project/${configured ? esc(ref) : "_/settings/api"}" target="_blank" rel="noopener">Project Settings → API</a>, copy the <b>Project URL</b> and the <b>publishable / anon</b> key (never the secret/service_role key).</div>
+          ${configured ? copyRow("Project URL", (window.RB_CONFIG && window.RB_CONFIG.SUPABASE_URL) || "") : `<div class="small">Values are not set yet.</div>`}
+        </li>
+        <li>
+          <b>Create the tables + security rules</b>
+          <div class="small muted">Open the <a href="https://supabase.com/dashboard/project/${configured ? esc(ref) : "_"}/sql/new" target="_blank" rel="noopener">SQL Editor</a>, paste all of <code>supabase/migrations.sql</code> from this repo and press <b>Run</b>. The last query should list <b>9 tables</b>, all with <code>rowsecurity = true</code>.</div>
+        </li>
+        <li>
+          <b>Supabase Auth → URL Configuration</b>
+          <div class="small muted">Page: <a href="https://supabase.com/dashboard/project/${configured ? esc(ref) : "_"}/auth/url-configuration" target="_blank" rel="noopener">Authentication → URL Configuration</a>. Set the Site URL, then add these to Redirect URLs:</div>
+          ${copyRow("Site URL", siteUrl)}
+          ${copyRow("Redirect URL (this page)", pageUrl)}
+          ${pageUrl !== siteUrl ? copyRow("Redirect URL (preview)", "Add this page + /** as well") : ""}
+        </li>
+        <li>
+          <b>Google Cloud Console → OAuth client (you paste the secret yourself)</b>
+          <div class="small muted">Open <a href="https://console.cloud.google.com/apis/credentials" target="_blank" rel="noopener">Google Cloud Console → Credentials</a> → <b>Create credentials → OAuth client ID → Web application</b>, then add:</div>
+          ${copyRow("Authorized JavaScript origin", origin)}
+          ${copyRow("Authorized redirect URI", redirectUri)}
+        </li>
+        <li>
+          <b>Supabase → Providers → Google → Enable</b>
+          <div class="small muted">Open <a href="https://supabase.com/dashboard/project/${configured ? esc(ref) : "_"}/auth/providers" target="_blank" rel="noopener">Authentication → Providers → Google</a>, turn it on and paste the <b>Client ID</b> and <b>Client Secret</b> there. Never send the secret in chat.</div>
+        </li>
+        <li>
+          <b>GitHub Pages</b>
+          <div class="small muted">After merging, open <a href="https://github.com/Mahicouragw/Register-book/settings/pages" target="_blank" rel="noopener">Settings → Pages</a> → <b>Deploy from a branch</b> → <code>main</code> → <code>/ (root)</code> → Save. The site is then at <a href="${esc(siteUrl)}" target="_blank" rel="noopener">${esc(siteUrl)}</a>.</div>
+        </li>
+      </ol>
+      <div class="small muted">Rule of thumb: the <b>publishable/anon</b> key is public and may live in <code>config.js</code>. The <b>service_role</b> key and the Google <b>Client Secret</b> must only ever be pasted into the Supabase dashboard.</div>`;
+    modal.classList.add("open");
+  }
+  function closeSetupModal() {
+    const modal = $("#setupModal");
+    if (modal) modal.classList.remove("open");
+  }
+
   // ---------------------------------------------------------------- auth actions
   async function handleGoogleLogin() {
     setHint("Opening Google…", "ok");
@@ -1568,7 +1662,8 @@
     openChat, sendChat, stateChatBack, startCall, endCall,
     handleGoogleLogin, handleSignOut, enterDemo, demoStory,
     handleFriend: respondFriend,
-    toast, toggleSidebar, manualRefresh
+    toast, toggleSidebar, manualRefresh,
+    openSetupModal, closeSetupModal, copyText
   });
 
   // small aliases used by inline handlers in older docs

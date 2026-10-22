@@ -334,6 +334,30 @@ test("bill book: qty + ₹ amount with page total and book total", async () => {
   dom.window.close();
 });
 
+test("owner setup guide: click-by-click steps with copyable values", async () => {
+  const { dom, w, doc } = loadApp();
+  await w.__RB.boot();
+
+  doc.querySelector('#loginGate button[onclick="openSetupModal()"]').click();
+  assert.ok(doc.getElementById("setupModal").classList.contains("open"), "setup guide opens from the login gate");
+  const text = doc.getElementById("setupBody").textContent;
+  assert.match(text, /Project URL/);
+  assert.match(text, /Create the tables \+ security rules/);
+  assert.match(text, /Authorized redirect URI/);
+  assert.match(text, /Providers → Google/);
+  assert.match(text, /GitHub Pages/);
+  assert.match(doc.getElementById("setupStatus").textContent, /not connected/i);
+  // links must be real dashboard links
+  const links = [...doc.querySelectorAll("#setupBody a")].map(a => a.href);
+  assert.ok(links.some(h => h.includes("supabase.com/dashboard")), "Supabase dashboard links");
+  assert.ok(links.some(h => h.includes("console.cloud.google.com")), "Google Cloud link");
+  assert.ok(links.some(h => h.includes("github.com/Mahicouragw/Register-book/settings/pages")), "GitHub Pages link");
+
+  w.closeSetupModal();
+  assert.equal(doc.getElementById("setupModal").classList.contains("open"), false);
+  dom.window.close();
+});
+
 test("demo data is shared between demo people in one browser (localStorage)", async () => {
   const { dom, w } = loadApp();
   await w.__RB.boot();
