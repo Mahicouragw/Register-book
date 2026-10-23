@@ -384,8 +384,336 @@ select
 from auth.users u
 on conflict (id) do nothing;
 
+-- ============================================================================
+-- PART 2 — notifications, group invites, real calls, account deletion
+-- (Everything above stays exactly as it was; nothing is renamed, so a future
+--  Flutter app can talk to the same tables.)
+-- ============================================================================
+
+-- ---------------------------------------------------------------- tables
+create table if not exists public.rb_group_invites (
+  id uuid primary key default gen_random_uuid(),
+  group_id text not null references public.rb_groups(id) on delete cascade,
+  code text not null unique,
+  invited_user_id uuid references auth.users(id) on delete cascade,
+  invited_email text,
+  created_by uuid not null references auth.users(id) on delete cascade,
+  status text not null default 'pending' check (status in ('pending','accepted','declined','revoked')),
+  created_at timestamptz not null default now(),
+  responded_at timestamptz
+);
+create index if not exists rb_group_invites_group_idx on public.rb_group_invites(group_id, status);
+create index if not exists rb_group_invites_user_idx on public.rb_group_invites(invited_user_id, status);
+
+create table if not exists public.rb_push_subscriptions (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  endpoint text not null unique,
+  p256dh text not null,
+  auth text not null,
+  user_agent text,
+  created_at timestamptz not null default now()
+);
+create index if not exists rb_push_subs_user_idx on public.rb_push_subscriptions(user_id);
+
+create table if not exists public.rb_notifications (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  type text not null check (type in ('message','friend','invite','call','system')),
+  title text not null,
+  body text not null default '',
+  data jsonb not null default '{}'::jsonb,
+  read boolean not null default false,
+  created_at timestamptz not null default now()
+);
+create index if not exists rb_notifications_user_idx on public.rb_notifications(user_id, read, created_at desc);
+
+create table if not exists public.rb_account_deletions (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null,
+  email text,
+  reason text,
+  status text not null default 'requested' check (status in ('requested','processing','done','failed')),
+  note text,
+  created_at timestamptz not null default now()
+);
+
+create table if not exists public.rb_calls (
+  id uuid primary key default gen_random_uuid(),
+  caller_id uuid not null references auth.users(id) on delete cascade,
+  callee_id uuid not null references auth.users(id) on delete cascade,
+  kind text not null default 'audio' check (kind in ('audio','video')),
+  status text not null default 'ringing' check (status in ('ringing','accepted','declined','ended','missed')),
+  created_at timestamptz not null default now(),
+  answered_at timestamptz,
+  ended_at timestamptz
+);
+create index if not exists rb_calls_callee_idx on public.rb_calls(callee_id, status);
+create index if not exists rb_calls_caller_idx on public.rb_calls(caller_id, status);
+
+create table if not exists public.rb_call_signals (
+  id bigserial primary key,
+  call_id uuid not null references public.rb_calls(id) on delete cascade,
+  from_user uuid not null references auth.users(id) on delete cascade,
+  kind text not null check (kind in ('offer','answer','ice')),
+  payload jsonb not null,
+  created_at timestamptz not null default now()
+);
+create index if not exists rb_call_signals_call_idx on public.rb_call_signals(call_id, id);
+
+-- ---------------------------------------------------------------- RLS on
+alter table public.rb_group_invites     enable row level security;
+alter table public.rb_push_subscriptions enable row level security;
+alter table public.rb_notifications     enable row level security;
+alter table public.rb_account_deletions enable row level security;
+alter table public.rb_calls             enable row level security;
+alter table public.rb_call_signals      enable row level security;
+
+-- ---------------------------------------------------------------- helper: call participants
+-- SECURITY DEFINER again, so a policy on rb_call_signals can look at rb_calls
+-- without recursion or leaking rows the caller is not part of.
+create or replace function public.rb_is_call_participant(cid uuid)
+returns boolean
+language sql stable security definer set search_path = public
+as $$
+  select exists (
+    select 1 from public.rb_calls c
+    where c.id = cid and (c.caller_id = auth.uid() or c.callee_id = auth.uid())
+  );
+$$;
+
+-- ---------------------------------------------------------------- policies: group invites
+-- Who can see an invite: the person who sent it (group creator) and the person
+-- it was addressed to. Nobody else.
+drop policy if exists rb_group_invites_read on public.rb_group_invites;
+create policy rb_group_invites_read on public.rb_group_invites
+  for select to authenticated using (
+    created_by = auth.uid()
+    or invited_user_id = auth.uid()
+    or public.rb_is_group_creator(group_id)
+  );
+
+-- Only the group creator can create an invite, and only in their own name.
+drop policy if exists rb_group_invites_insert on public.rb_group_invites;
+create policy rb_group_invites_insert on public.rb_group_invites
+  for insert to authenticated with check (
+    public.rb_is_group_creator(group_id) and created_by = auth.uid()
+  );
+
+-- The invitee may accept or decline (nothing else). The creator may revoke.
+drop policy if exists rb_group_invites_update on public.rb_group_invites;
+create policy rb_group_invites_update on public.rb_group_invites
+  for update to authenticated
+  using (
+    (invited_user_id = auth.uid() and status = 'pending')
+    or (created_by = auth.uid())
+  )
+  with check (
+    (invited_user_id = auth.uid() and status in ('pending','accepted','declined'))
+    or (created_by = auth.uid() and status in ('pending','revoked'))
+  );
+
+drop policy if exists rb_group_invites_delete on public.rb_group_invites;
+create policy rb_group_invites_delete on public.rb_group_invites
+  for delete to authenticated using (created_by = auth.uid());
+
+-- Accepting an invite must also make you a member. That needs to happen even
+-- though rb_group_members normally only accepts inserts from the creator, so the
+-- whole "join a group" step runs through this SECURITY DEFINER function.
+create or replace function public.rb_accept_group_invite(invite_code text)
+returns text
+language plpgsql security definer set search_path = public
+as $$
+declare
+  inv public.rb_group_invites%rowtype;
+begin
+  select * into inv
+  from public.rb_group_invites
+  where code = invite_code
+  limit 1;
+
+  if inv.id is null then
+    raise exception 'That invite link is not valid.' using errcode = 'P0002';
+  end if;
+
+  if inv.status <> 'pending' then
+    raise exception 'That invite was already %', inv.status using errcode = 'P0002';
+  end if;
+
+  if inv.invited_user_id is not null and inv.invited_user_id <> auth.uid() then
+    raise exception 'That invite was sent to someone else.' using errcode = '42501';
+  end if;
+
+  if auth.uid() is null then
+    raise exception 'Sign in first, then open the invite link again.' using errcode = '42501';
+  end if;
+
+  update public.rb_group_invites
+     set status = 'accepted',
+         responded_at = now(),
+         invited_user_id = coalesce(invited_user_id, auth.uid())
+   where id = inv.id;
+
+  insert into public.rb_group_members (group_id, user_id)
+  values (inv.group_id, auth.uid())
+  on conflict (group_id, user_id) do nothing;
+
+  return inv.group_id;
+end;
+$$;
+
+create or replace function public.rb_decline_group_invite(invite_code text)
+returns text
+language plpgsql security definer set search_path = public
+as $$
+declare
+  inv public.rb_group_invites%rowtype;
+begin
+  select * into inv from public.rb_group_invites where code = invite_code limit 1;
+  if inv.id is null then
+    raise exception 'That invite link is not valid.' using errcode = 'P0002';
+  end if;
+  if inv.invited_user_id is not null and inv.invited_user_id <> auth.uid() then
+    raise exception 'That invite was sent to someone else.' using errcode = '42501';
+  end if;
+  update public.rb_group_invites
+     set status = 'declined',
+         responded_at = now(),
+         invited_user_id = coalesce(invited_user_id, auth.uid())
+   where id = inv.id and status = 'pending';
+  return inv.group_id;
+end;
+$$;
+
+-- ---------------------------------------------------------------- policies: push subscriptions
+drop policy if exists rb_push_subscriptions_read on public.rb_push_subscriptions;
+create policy rb_push_subscriptions_read on public.rb_push_subscriptions
+  for select to authenticated using (user_id = auth.uid());
+
+drop policy if exists rb_push_subscriptions_insert on public.rb_push_subscriptions;
+create policy rb_push_subscriptions_insert on public.rb_push_subscriptions
+  for insert to authenticated with check (user_id = auth.uid());
+
+drop policy if exists rb_push_subscriptions_update on public.rb_push_subscriptions;
+create policy rb_push_subscriptions_update on public.rb_push_subscriptions
+  for update to authenticated using (user_id = auth.uid()) with check (user_id = auth.uid());
+
+drop policy if exists rb_push_subscriptions_delete on public.rb_push_subscriptions;
+create policy rb_push_subscriptions_delete on public.rb_push_subscriptions
+  for delete to authenticated using (user_id = auth.uid());
+
+-- ---------------------------------------------------------------- policies: notifications
+-- Rows are written only by the rb-notify Edge Function, which uses the
+-- service_role key and therefore bypasses RLS. From the browser you may read
+-- your own notifications and mark them read — you may NOT insert one, so nobody
+-- can forge a notification to another member of staff.
+drop policy if exists rb_notifications_read on public.rb_notifications;
+create policy rb_notifications_read on public.rb_notifications
+  for select to authenticated using (user_id = auth.uid());
+
+drop policy if exists rb_notifications_update on public.rb_notifications;
+create policy rb_notifications_update on public.rb_notifications
+  for update to authenticated using (user_id = auth.uid()) with check (user_id = auth.uid());
+
+drop policy if exists rb_notifications_delete on public.rb_notifications;
+create policy rb_notifications_delete on public.rb_notifications
+  for delete to authenticated using (user_id = auth.uid());
+
+-- ---------------------------------------------------------------- policies: account deletions
+drop policy if exists rb_account_deletions_insert on public.rb_account_deletions;
+create policy rb_account_deletions_insert on public.rb_account_deletions
+  for insert to authenticated with check (user_id = auth.uid());
+
+drop policy if exists rb_account_deletions_read on public.rb_account_deletions;
+create policy rb_account_deletions_read on public.rb_account_deletions
+  for select to authenticated using (user_id = auth.uid());
+
+-- ---------------------------------------------------------------- policies: calls
+drop policy if exists rb_calls_read on public.rb_calls;
+create policy rb_calls_read on public.rb_calls
+  for select to authenticated using (caller_id = auth.uid() or callee_id = auth.uid());
+
+drop policy if exists rb_calls_insert on public.rb_calls;
+create policy rb_calls_insert on public.rb_calls
+  for insert to authenticated with check (
+    caller_id = auth.uid() and caller_id <> callee_id
+  );
+
+drop policy if exists rb_calls_update on public.rb_calls;
+create policy rb_calls_update on public.rb_calls
+  for update to authenticated
+  using (caller_id = auth.uid() or callee_id = auth.uid())
+  with check (caller_id = auth.uid() or callee_id = auth.uid());
+
+drop policy if exists rb_calls_delete on public.rb_calls;
+create policy rb_calls_delete on public.rb_calls
+  for delete to authenticated using (caller_id = auth.uid());
+
+drop policy if exists rb_call_signals_read on public.rb_call_signals;
+create policy rb_call_signals_read on public.rb_call_signals
+  for select to authenticated using (public.rb_is_call_participant(call_id));
+
+drop policy if exists rb_call_signals_insert on public.rb_call_signals;
+create policy rb_call_signals_insert on public.rb_call_signals
+  for insert to authenticated with check (
+    from_user = auth.uid() and public.rb_is_call_participant(call_id)
+  );
+
+-- ---------------------------------------------------------------- grants
+revoke all on public.rb_group_invites     from anon;
+revoke all on public.rb_push_subscriptions from anon;
+revoke all on public.rb_notifications     from anon;
+revoke all on public.rb_account_deletions from anon;
+revoke all on public.rb_calls             from anon;
+revoke all on public.rb_call_signals      from anon;
+
+grant select, insert, update, delete on public.rb_group_invites     to authenticated;
+grant select, insert, update, delete on public.rb_push_subscriptions to authenticated;
+-- NOTE: no INSERT grant on rb_notifications — only the Edge Function writes rows.
+grant select, update, delete           on public.rb_notifications     to authenticated;
+grant select, insert                   on public.rb_account_deletions to authenticated;
+grant select, insert, update, delete   on public.rb_calls             to authenticated;
+grant select, insert                   on public.rb_call_signals      to authenticated;
+
+grant execute on function public.rb_accept_group_invite(text) to authenticated;
+grant execute on function public.rb_decline_group_invite(text) to authenticated;
+grant execute on function public.rb_is_call_participant(uuid) to authenticated;
+
+-- rb_call_signals.id is a bigserial, so signed-in users need the sequence too
+do $$
+begin
+  if exists (select 1 from pg_class c join pg_namespace n on n.oid = c.relnamespace
+             where n.nspname = 'public' and c.relname = 'rb_call_signals_id_seq' and c.relkind = 'S') then
+    execute 'grant usage, select on sequence public.rb_call_signals_id_seq to authenticated';
+  end if;
+end$$;
+
+-- ---------------------------------------------------------------- realtime
+-- Adds the tables the app listens to while it is open (instant banner + ting
+-- sound). Safe to run repeatedly, and skipped where the publication does not
+-- exist (for example in the local PGlite test database).
+do $$
+declare
+  t text;
+begin
+  if exists (select 1 from pg_publication where pubname = 'supabase_realtime') then
+    foreach t in array array[
+      'rb_direct_messages', 'rb_notifications', 'rb_friend_requests',
+      'rb_group_invites', 'rb_calls', 'rb_call_signals', 'rb_group_messages'
+    ]
+    loop
+      begin
+        execute format('alter publication supabase_realtime add table public.%I', t);
+      exception
+        when duplicate_object then null;
+        when others then null;
+      end;
+    end loop;
+  end if;
+end$$;
+
 -- ---------------------------------------------------------------- check
--- Expect 9 rows and row_security = true for every one of them.
+-- Expect 15 rows and row_security = true for every one of them.
 select tablename, rowsecurity
 from pg_tables
 where schemaname = 'public' and tablename like 'rb\_%'
