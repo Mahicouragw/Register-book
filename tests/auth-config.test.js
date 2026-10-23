@@ -46,8 +46,11 @@ function boot({ googleEnabled, fetchFails = false, realConfig = true }) {
   } else {
     w.RB_CONFIG = { SUPABASE_URL: "https://REPLACE.supabase.co", SUPABASE_ANON_KEY: "REPLACE", isConfigured: () => false, SITE_URL: "https://x", projectRef: () => "" };
   }
+  w.eval(fs.readFileSync(path.join(ROOT, "notify.js"), "utf8"));
   w.eval(fs.readFileSync(path.join(ROOT, "auth.js"), "utf8"));
   w.eval(fs.readFileSync(path.join(ROOT, "store.js"), "utf8"));
+  w.eval(fs.readFileSync(path.join(ROOT, "push.js"), "utf8"));
+  w.eval(fs.readFileSync(path.join(ROOT, "rtc.js"), "utf8"));
   w.eval(fs.readFileSync(path.join(ROOT, "app.js"), "utf8"));
   return { dom, w, doc: w.document, nav: () => navigatedTo };
 }

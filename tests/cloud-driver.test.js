@@ -42,6 +42,8 @@ function makeMockSupabase(initial = {}) {
   const db = {
     rb_profiles: [], rb_registers: [], rb_entries: [], rb_shares: [], rb_groups: [],
     rb_group_members: [], rb_group_messages: [], rb_friend_requests: [], rb_direct_messages: [],
+    rb_group_invites: [], rb_push_subscriptions: [], rb_notifications: [],
+    rb_account_deletions: [], rb_calls: [], rb_call_signals: [],
     ...JSON.parse(JSON.stringify(initial))
   };
   const state = { me: GOLD };
@@ -78,6 +80,16 @@ function makeMockSupabase(initial = {}) {
       case "rb_group_messages": return rows.filter(x => groupIds.has(x.group_id));
       case "rb_friend_requests": return rows.filter(f => f.from_user === state.me || f.to_user === state.me);
       case "rb_direct_messages": return rows.filter(d => d.sender_id === state.me || d.receiver_id === state.me);
+      // --- new tables ---
+      case "rb_group_invites": return rows.filter(i =>
+        i.created_by === state.me || i.invited_user_id === state.me ||
+        db.rb_groups.some(g => g.id === i.group_id && g.created_by === state.me));
+      case "rb_push_subscriptions": return rows.filter(x => x.user_id === state.me);
+      case "rb_notifications": return rows.filter(n => n.user_id === state.me);
+      case "rb_account_deletions": return rows.filter(a => a.user_id === state.me);
+      case "rb_calls": return rows.filter(c => c.caller_id === state.me || c.callee_id === state.me);
+      case "rb_call_signals": return rows.filter(sg =>
+        db.rb_calls.some(c => c.id === sg.call_id && (c.caller_id === state.me || c.callee_id === state.me)));
       default: return [];
     }
   }
@@ -103,6 +115,23 @@ function makeMockSupabase(initial = {}) {
         return db.rb_friend_requests.some(f => f.id === row.id && f.to_user === state.me) ? null : rls(table);
       case "rb_direct_messages":
         return row.sender_id === state.me ? null : rls(table);
+      // --- new tables ---
+      case "rb_push_subscriptions":
+        return row.user_id === state.me ? null : rls(table);
+      case "rb_notifications":
+        // the browser has no INSERT grant: only the Edge Function writes rows
+        return rls(table);
+      case "rb_account_deletions":
+        return row.user_id === state.me ? null : rls(table);
+      case "rb_calls":
+        return row.caller_id === state.me || row.callee_id === state.me ? null : rls(table);
+      case "rb_call_signals":
+        return row.from_user === state.me &&
+          db.rb_calls.some(c => c.id === row.call_id && (c.caller_id === state.me || c.callee_id === state.me))
+          ? null : rls(table);
+      case "rb_group_invites":
+        return db.rb_groups.some(g => g.id === row.group_id && g.created_by === state.me) && row.created_by === state.me
+          ? null : rls(table);
       default: return { message: `relation "public.${table}" does not exist` };
     }
   }
@@ -136,6 +165,7 @@ function makeMockSupabase(initial = {}) {
       return this;
     }
     order(col, opts) { this.orders.push({ col, asc: !opts || opts.ascending !== false }); return this; }
+    limit(n) { this.maxRows = n; return this; }
     single() { this.singleMode = true; return this; }
     match(row) {
       return this.filters.every(f => {
@@ -150,6 +180,7 @@ function makeMockSupabase(initial = {}) {
       if (!SCHEMA[table]) return { data: null, error: { message: `relation "public.${table}" does not exist` } };
       if (this.mode === "select") {
         let rows = readFilter(table, db[table].slice()).filter(r => this.match(r));
+        if (this.maxRows != null) rows = rows.slice(0, this.maxRows);
         this.orders.forEach(o => {
           rows = rows.slice().sort((a, b) => {
             const av = a[o.col], bv = b[o.col];
@@ -218,6 +249,40 @@ function makeMockSupabase(initial = {}) {
 
   const client = {
     from: table => new Query(table),
+    rpc(name, args) {
+      // Minimal support for the SECURITY DEFINER invite helpers. The full RLS
+      // behaviour is proven against real Postgres in tests/notifications.test.js.
+      const a = args || {};
+      if (name === "rb_invite_preview") {
+        const inv = db.rb_group_invites.find(i => i.code === String(a.invite_code || "").toUpperCase());
+        if (!inv) return Promise.resolve({ data: null, error: null });
+        const g = db.rb_groups.find(x => x.id === inv.group_id) || {};
+        return Promise.resolve({
+          data: {
+            code: inv.code, status: inv.status, groupId: g.id, groupName: g.name,
+            fromName: "a colleague", fromAvatar: null,
+            memberCount: db.rb_group_members.filter(m => m.group_id === inv.group_id).length
+          },
+          error: null
+        });
+      }
+      if (name === "rb_accept_group_invite" || name === "rb_decline_group_invite") {
+        const inv = db.rb_group_invites.find(i => i.code === String(a.invite_code || "").toUpperCase());
+        if (!inv) return Promise.resolve({ data: null, error: { message: "That invite link is not valid." } });
+        if (inv.status !== "pending") return Promise.resolve({ data: null, error: { message: "That invite was already " + inv.status } });
+        if (inv.invited_user_id && inv.invited_user_id !== state.me) {
+          return Promise.resolve({ data: null, error: { message: "That invite was sent to someone else." } });
+        }
+        inv.status = name === "rb_accept_group_invite" ? "accepted" : "declined";
+        inv.invited_user_id = inv.invited_user_id || state.me;
+        if (name === "rb_accept_group_invite" &&
+            !db.rb_group_members.some(m => m.group_id === inv.group_id && m.user_id === state.me)) {
+          db.rb_group_members.push({ group_id: inv.group_id, user_id: state.me });
+        }
+        return Promise.resolve({ data: inv.group_id, error: null });
+      }
+      return Promise.resolve({ data: null, error: { message: "unknown rpc " + name } });
+    },
     auth: { getSession: async () => ({ data: { session: { user: { id: state.me, email: USERS[state.me].email, user_metadata: { full_name: USERS[state.me].name } } } }, error: null }) }
   };
   return { client, db, state, errors };
@@ -246,7 +311,10 @@ async function bootCloud(userId, seed = {}) {
     projectRef: () => "abcdefghijkl",
     friendly: e => ({ title: "Error", message: String(e && e.message || e), steps: [] })
   };
+  w.eval(fs.readFileSync(path.join(ROOT, "notify.js"), "utf8"));
   w.eval(fs.readFileSync(path.join(ROOT, "store.js"), "utf8"));
+  w.eval(fs.readFileSync(path.join(ROOT, "push.js"), "utf8"));
+  w.eval(fs.readFileSync(path.join(ROOT, "rtc.js"), "utf8"));
   w.eval(fs.readFileSync(path.join(ROOT, "app.js"), "utf8"));
   const ok = await w.RBStore.initCloud();
   return { dom, w, mock, ok, doc: w.document };

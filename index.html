@@ -4,10 +4,19 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <title>RegisterBook Community — Shared Digital Register Books</title>
-  <meta name="description" content="Replace paper register books with shared digital books. Create unlimited registers, share view-only, search by date, chat with staff.">
+  <meta name="description" content="Replace paper register books with shared digital books. Create unlimited registers, share view-only, get notified like WhatsApp, call staff for free.">
   <meta name="theme-color" content="#0f766e">
+
+  <!-- Installable app (needed for push notifications on a phone) -->
+  <link rel="manifest" href="manifest.webmanifest">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="RegisterBook">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+
   <link rel="stylesheet" href="styles.css">
-  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='16' fill='%230f766e'/%3E%3Ctext x='50' y='60' text-anchor='middle' font-size='52' fill='white'%3E%F0%9F%93%92%3C/text%3E%3C/svg%3E">
+  <link rel="icon" href="icons/icon-192.png">
 </head>
 <body>
   <!-- ============ LOGIN GATE ============ -->
@@ -31,74 +40,67 @@
       <div class="gate-foot">
         Staff have to buy many expensive paper books — Medical Checklist, Bill Book, Attendance, Stock… This app replaces them with shared digital books.<br>
         <span class="muted">Only the creator can edit. View-only access is enforced by Row Level Security in the database, not just by hiding buttons.</span>
+        <div class="mt8">
+          <a href="terms.html">Terms &amp; Conditions</a> · <a href="privacy.html">Privacy Policy</a>
+        </div>
       </div>
     </div>
   </div>
 
   <!-- ============ APP SHELL ============ -->
   <div id="appShell" class="app-shell">
-    <div class="mobile-bar">
-      <button class="btn btn-sm menu-btn" id="menuBtn" onclick="toggleSidebar(true)" aria-label="Open menu">☰</button>
-      <div class="mobile-brand">📒 RegisterBook</div>
-      <span id="modeBadgeMobile" class="mode-badge mode-demo">Demo</span>
+    <header class="app-top">
+      <div class="app-top-brand"><i aria-hidden="true">📒</i> RegisterBook</div>
+      <span id="modeBadge" class="mode-badge mode-demo">Demo</span>
+      <button id="bellBtn" class="bell" onclick="openInbox()" aria-label="Notifications">
+        <span aria-hidden="true">🔔</span><span id="bellCount" class="bell-count" hidden>0</span>
+      </button>
+    </header>
+
+    <div class="subbar" id="subbar">
+      <div class="subbar-titles">
+        <h1 id="topTitle">Home</h1>
+        <p id="topSub"></p>
+      </div>
+      <div class="topbar-actions" id="topActions"></div>
     </div>
-    <div id="scrim" class="scrim" onclick="toggleSidebar(false)"></div>
-
-    <aside class="sidebar" id="sidebar">
-      <div class="side-head">
-        <div class="brand"><i>📒</i> RegisterBook <span class="brand-community">Community</span></div>
-        <div class="brand-sub">Unlimited register books on one phone</div>
-        <div class="row" style="justify-content:space-between">
-          <div id="modeBadge" class="mode-badge mode-demo">Demo mode</div>
-          <button class="btn btn-sm btn-ghost side-close" onclick="toggleSidebar(false)" aria-label="Close menu">✕</button>
-        </div>
-      </div>
-
-      <div id="accountCard" class="account-card"></div>
-
-      <div class="demo-switch" id="demoSwitch">
-        <label for="demoUserSelect">Demo — switch account to test sharing</label>
-        <select id="demoUserSelect" class="demo-select" aria-label="Demo user"></select>
-        <div class="help-text">Try the story: create as <b>Goldfish</b>, share, then switch to <b>Silverfish</b> — Silverfish can read &amp; search but cannot edit.</div>
-      </div>
-
-      <nav class="nav">
-        <div class="nav-item" data-view="home" onclick="setView('home')"><span class="ico">🏠</span> Home <span class="count" id="countHome">•</span></div>
-        <div class="nav-item" data-view="myRegisters" onclick="setView('myRegisters')"><span class="ico">📒</span> My Registers <span class="count" id="countMy">0</span></div>
-        <div class="nav-item" data-view="shared" onclick="setView('shared')"><span class="ico">👁️</span> Shared With Me <span class="count" id="countShared">0</span></div>
-        <div class="nav-item" data-view="people" onclick="setView('people')"><span class="ico">🧑‍🤝‍🧑</span> People &amp; Friends <span class="count" id="countPeople"></span></div>
-        <div class="nav-item" data-view="groups" onclick="setView('groups')"><span class="ico">👥</span> Groups <span class="count" id="countGroups">0</span></div>
-        <div class="nav-item" data-view="chats" onclick="setView('chats')"><span class="ico">💬</span> Private Chats <span class="count" id="countChats"></span></div>
-        <button class="btn btn-primary create-btn" onclick="openCreateModal()">+ Create Register</button>
-      </nav>
-
-      <div class="side-foot">
-        <div><b>Today, auto-filled:</b> <span id="todayPreview"></span></div>
-        <div class="mt8">10 lines per page. When a page fills, the next line moves to a new page automatically.</div>
-        <div id="demoResetWrap" class="mt8"><button class="btn btn-sm btn-ghost" onclick="confirmDemoReset()">↺ Reset demo data</button></div>
-        <div class="mt8"><button class="btn btn-sm btn-ghost" onclick="openSetupModal()">🔧 Owner setup guide</button></div>
-      </div>
-    </aside>
 
     <main class="main">
-      <div class="topbar">
-        <div class="topbar-titles">
-          <h1 id="topTitle">Community Home</h1>
-          <p id="topSub">Registers shared with you + your community</p>
-        </div>
-        <div class="topbar-actions" id="topActions"></div>
-      </div>
-
       <div class="content">
         <div id="view-home" class="view"></div>
-        <div id="view-myRegisters" class="view" style="display:none"></div>
-        <div id="view-shared" class="view" style="display:none"></div>
-        <div id="view-people" class="view" style="display:none"></div>
-        <div id="view-groups" class="view" style="display:none"></div>
-        <div id="view-chats" class="view" style="display:none"></div>
+
+        <div id="view-library" class="view" style="display:none">
+          <div id="view-myRegisters"></div>
+          <div id="view-shared"></div>
+        </div>
+
+        <div id="view-community" class="view" style="display:none">
+          <div id="view-people"></div>
+          <div id="view-groups"></div>
+          <div id="view-chats"></div>
+        </div>
+
+        <div id="view-inbox" class="view" style="display:none"></div>
+        <div id="view-settings" class="view" style="display:none"></div>
         <div id="view-registerDetail" class="view" style="display:none"></div>
       </div>
     </main>
+
+    <!-- four tabs, nothing else -->
+    <nav class="tabbar" id="tabbar" role="tablist" aria-label="Main screens">
+      <button class="tab" id="tab-home" role="tab" data-view="home" onclick="setView('home')">
+        <span class="tab-ico" aria-hidden="true">🏠</span><span class="tab-label">Home</span>
+      </button>
+      <button class="tab" id="tab-library" role="tab" data-view="library" onclick="setView('library')">
+        <span class="tab-ico" aria-hidden="true">📒</span><span class="tab-label">Library</span>
+      </button>
+      <button class="tab" id="tab-community" role="tab" data-view="community" onclick="setView('community')">
+        <span class="tab-ico" aria-hidden="true">👥</span><span class="tab-label">Community</span>
+      </button>
+      <button class="tab" id="tab-settings" role="tab" data-view="settings" onclick="setView('settings')">
+        <span class="tab-ico" aria-hidden="true">⚙️</span><span class="tab-label">Settings</span>
+      </button>
+    </nav>
   </div>
 
   <!-- ============ MODALS ============ -->
@@ -173,6 +175,51 @@
     </div>
   </div>
 
+  <!-- group invite: by name + by link -->
+  <div id="inviteModal" class="modal" role="dialog" aria-modal="true" aria-labelledby="inviteModalTitle">
+    <div class="modal-card">
+      <div class="modal-head"><h3 id="inviteModalTitle">Invite people to this group</h3><button class="btn btn-sm" onclick="closeInviteModal()" aria-label="Close">✕</button></div>
+      <div class="modal-body">
+        <input type="hidden" id="inviteGroupId">
+        <div class="small muted" style="margin-bottom:10px">Inviting to <b id="inviteGroupName"></b>. Members can read every register shared with the group.</div>
+
+        <div class="form-row">
+          <label for="inviteUserInput">Search a person by name</label>
+          <div class="suggest-wrap">
+            <input id="inviteUserInput" placeholder="Type a name…" autocomplete="off" oninput="handleInviteUserInput(this.value)">
+            <div id="inviteSuggest" class="suggest-box"></div>
+          </div>
+          <div id="inviteSelected" class="inline mt8"></div>
+        </div>
+        <div class="row"><button class="btn btn-primary" onclick="sendInvite()">Send invite</button></div>
+
+        <hr class="hr">
+        <div class="form-row">
+          <label>Or copy an invite link</label>
+          <button class="btn btn-primary" onclick="makeInviteLink()">Copy invite link</button>
+          <div id="inviteLinkBox" class="copy-row mt8" hidden>
+            <div class="copy-value" id="inviteLinkValue"></div>
+            <button class="btn btn-sm" onclick="copyInviteLink()">Copy</button>
+          </div>
+          <div class="small muted mt8">Anyone who opens the link while signed in can join this group once.</div>
+        </div>
+
+        <div id="inviteExisting" class="mt12 small"></div>
+      </div>
+      <div class="modal-body" style="border-top:1px solid var(--border);padding-top:0">
+        <div class="row"><button class="btn" onclick="closeInviteModal()">Done</button></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- accepting an invite opened by link -->
+  <div id="joinModal" class="modal" role="dialog" aria-modal="true" aria-labelledby="joinModalTitle">
+    <div class="modal-card">
+      <div class="modal-head"><h3 id="joinModalTitle">Group invite</h3><button class="btn btn-sm" onclick="closeJoinModal()" aria-label="Close">✕</button></div>
+      <div class="modal-body" id="joinBody"></div>
+    </div>
+  </div>
+
   <div id="setupModal" class="modal" role="dialog" aria-modal="true" aria-labelledby="setupModalTitle">
     <div class="modal-card">
       <div class="modal-head"><h3 id="setupModalTitle">Owner setup guide</h3><button class="btn btn-sm" onclick="closeSetupModal()" aria-label="Close">✕</button></div>
@@ -184,17 +231,26 @@
     </div>
   </div>
 
-  <div id="callOverlay" class="call-overlay">
+  <!-- delete account -->
+  <div id="deleteModal" class="modal" role="dialog" aria-modal="true" aria-labelledby="deleteModalTitle">
+    <div class="modal-card">
+      <div class="modal-head"><h3 id="deleteModalTitle">Delete my account</h3><button class="btn btn-sm" onclick="closeDeleteModal()" aria-label="Close">✕</button></div>
+      <div class="modal-body" id="deleteBody"></div>
+    </div>
+  </div>
+
+  <!-- ============ REAL CALL SCREEN (WebRTC) ============ -->
+  <div id="callOverlay" class="call-overlay" role="dialog" aria-modal="true" aria-label="Call">
     <div class="call-card">
+      <div class="call-video-wrap">
+        <video id="remoteVideo" class="call-video" autoplay playsinline></video>
+        <video id="localVideo" class="call-video-self" autoplay playsinline muted></video>
+      </div>
       <div id="callAvatar" class="call-avatar-wrap"></div>
       <div id="callName" class="call-name">—</div>
-      <div id="callStatus" class="call-status">Calling…</div>
-      <div class="demo-label">⚠️ Demo call screen — real audio/video calling (WebRTC) is <b>not</b> connected yet. We never fake it silently. Real calling is listed as the next step.</div>
-      <div class="call-actions">
-        <button class="btn-call btn-mic" title="Mute (demo only)" onclick="toast('Microphone is not connected — demo screen only.')">🎙️</button>
-        <button class="btn-call btn-end" onclick="endCall()" title="End demo call">📞</button>
-      </div>
-      <div class="small" style="margin-top:10px;color:#94a3b8">Group &amp; private chat work now. Real calling will use WebRTC + Supabase Realtime.</div>
+      <div id="callStatus" class="call-status">—</div>
+      <div id="callError" class="call-error" role="alert"></div>
+      <div class="call-actions" id="callActions"></div>
     </div>
   </div>
 
@@ -202,8 +258,11 @@
 
   <script src="vendor/supabase.js"></script>
   <script src="config.js"></script>
+  <script src="notify.js"></script>
   <script src="auth.js"></script>
   <script src="store.js"></script>
+  <script src="push.js"></script>
+  <script src="rtc.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

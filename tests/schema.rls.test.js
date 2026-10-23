@@ -66,13 +66,13 @@ async function superuser(db) {
   await db.exec(`reset role;`);
 }
 
-test("migration creates all 9 rb_ tables with Row Level Security enabled", async () => {
+test("migration creates all 15 rb_ tables with Row Level Security enabled", async () => {
   const db = await makeDb();
   const { rows } = await db.query(`
     select tablename, rowsecurity from pg_tables
     where schemaname = 'public' and tablename like 'rb\\_%'
     order by tablename`);
-  assert.equal(rows.length, 9, "9 tables");
+  assert.equal(rows.length, 15, "15 tables");
   for (const r of rows) assert.equal(r.rowsecurity, true, `${r.tablename} has RLS on`);
   await db.close();
 });
@@ -320,6 +320,6 @@ test("the migration is safe to run twice", async () => {
   const { rows } = await db.query(`select count(*)::int as n from pg_policies where schemaname = 'public' and tablename like 'rb\\_%'`);
   assert.ok(rows[0].n >= 20, `policies present after re-running (${rows[0].n})`);
   const t = await db.query(`select count(*)::int as n from pg_tables where schemaname='public' and tablename like 'rb\\_%'`);
-  assert.equal(t.rows[0].n, 9);
+  assert.equal(t.rows[0].n, 15);
   await db.close();
 });
