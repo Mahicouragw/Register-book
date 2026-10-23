@@ -529,7 +529,7 @@ declare
 begin
   select * into inv
   from public.rb_group_invites
-  where code = invite_code
+  where code = upper(btrim(coalesce(invite_code, '')))
   limit 1;
 
   if inv.id is null then
@@ -569,7 +569,7 @@ as $$
 declare
   inv public.rb_group_invites%rowtype;
 begin
-  select * into inv from public.rb_group_invites where code = invite_code limit 1;
+  select * into inv from public.rb_group_invites where code = upper(btrim(coalesce(invite_code, ''))) limit 1;
   if inv.id is null then
     raise exception 'That invite link is not valid.' using errcode = 'P0002';
   end if;
@@ -659,6 +659,42 @@ create policy rb_call_signals_insert on public.rb_call_signals
     from_user = auth.uid() and public.rb_is_call_participant(call_id)
   );
 
+-- Someone holding an invite link must be able to see WHAT they are joining
+-- before they accept. They cannot read the rb_group_invites row itself (RLS
+-- hides it), so this SECURITY DEFINER helper answers only for an exact code.
+create or replace function public.rb_invite_preview(invite_code text)
+returns json
+language plpgsql security definer set search_path = public
+as $$
+declare
+  inv public.rb_group_invites%rowtype;
+  g   public.rb_groups%rowtype;
+  p   public.rb_profiles%rowtype;
+begin
+  select * into inv
+    from public.rb_group_invites
+   where code = upper(btrim(coalesce(invite_code, '')))
+   limit 1;
+
+  if inv.id is null then
+    return null;
+  end if;
+
+  select * into g from public.rb_groups where id = inv.group_id;
+  select * into p from public.rb_profiles where id = inv.created_by;
+
+  return json_build_object(
+    'code',         inv.code,
+    'status',       inv.status,
+    'groupId',      g.id,
+    'groupName',    g.name,
+    'fromName',     coalesce(p.name, 'a colleague'),
+    'fromAvatar',   p.avatar_url,
+    'memberCount',  (select count(*) from public.rb_group_members m where m.group_id = g.id)
+  );
+end;
+$$;
+
 -- ---------------------------------------------------------------- grants
 revoke all on public.rb_group_invites     from anon;
 revoke all on public.rb_push_subscriptions from anon;
@@ -675,6 +711,7 @@ grant select, insert                   on public.rb_account_deletions to authent
 grant select, insert, update, delete   on public.rb_calls             to authenticated;
 grant select, insert                   on public.rb_call_signals      to authenticated;
 
+grant execute on function public.rb_invite_preview(text) to authenticated;
 grant execute on function public.rb_accept_group_invite(text) to authenticated;
 grant execute on function public.rb_decline_group_invite(text) to authenticated;
 grant execute on function public.rb_is_call_participant(uuid) to authenticated;

@@ -61,7 +61,8 @@
   // ---- state ----
   const DB = {
     profiles: [], registers: [], entries: [], shares: [], groups: [], groupMembers: [],
-    groupMessages: [], friendRequests: [], directMessages: []
+    groupMessages: [], friendRequests: [], directMessages: [],
+    groupInvites: [], notifications: [], calls: [], callSignals: [], accountDeletions: []
   };
   let mode = "demo";
   let me = null;
@@ -241,9 +242,13 @@
     ]);
 
     const groupIds = groups.map(g => g.id);
-    const groupMessages = groupIds.length
-      ? await sel(supa.from("rb_group_messages").select("*").in("group_id", groupIds).order("created_at", { ascending: true }), "group messages")
-      : [];
+    const [groupMessagesRaw, invites, notes, calls] = await Promise.all([
+      groupIds.length ? sel(supa.from("rb_group_messages").select("*").in("group_id", groupIds).order("created_at", { ascending: true }), "group messages") : [],
+      sel(supa.from("rb_group_invites").select("*").order("created_at", { ascending: false }), "group invites"),
+      sel(supa.from("rb_notifications").select("*").order("created_at", { ascending: false }).limit(50), "notifications"),
+      sel(supa.from("rb_calls").select("*").order("created_at", { ascending: false }).limit(20), "calls")
+    ]);
+    const groupMessages = groupMessagesRaw;
 
     DB.profiles = profiles.map(p => ({ id: p.id, name: p.name || (p.email || "Staff").split("@")[0], email: p.email || "", avatar: p.avatar_url || "", color: colorFor(p.id) }));
     DB.registers = regs.map(r => ({ id: r.id, ownerId: r.owner_id, name: r.name, type: r.type, createdAt: r.created_at }));
@@ -254,6 +259,9 @@
     DB.groupMessages = groupMessages.map(x => ({ id: x.id, groupId: x.group_id, senderId: x.sender_id, text: x.text, createdAt: x.created_at }));
     DB.friendRequests = friendRequests.map(x => ({ id: x.id, fromUser: x.from_user, toUser: x.to_user, status: x.status, createdAt: x.created_at }));
     DB.directMessages = dms.map(x => ({ id: x.id, senderId: x.sender_id, receiverId: x.receiver_id, text: x.text, createdAt: x.created_at }));
+    DB.groupInvites = invites.map(x => ({ id: x.id, groupId: x.group_id, code: x.code, invitedUserId: x.invited_user_id, invitedEmail: x.invited_email, createdBy: x.created_by, status: x.status, createdAt: x.created_at, respondedAt: x.responded_at }));
+    DB.notifications = notes.map(x => ({ id: x.id, userId: x.user_id, type: x.type, title: x.title, body: x.body || "", data: x.data || {}, read: !!x.read, createdAt: x.created_at }));
+    DB.calls = calls.map(x => ({ id: x.id, callerId: x.caller_id, calleeId: x.callee_id, kind: x.kind, status: x.status, createdAt: x.created_at, answeredAt: x.answered_at, endedAt: x.ended_at }));
     lastLoadedAt = new Date().toISOString();
   }
 
@@ -567,13 +575,16 @@
   async function sendDirectMessage(userId, text) {
     const msg = { id: uid("dm"), senderId: me.id, receiverId: userId, text, createdAt: new Date().toISOString() };
     if (mode === "demo") {
-      DB.directMessages.push(msg); persist(); return msg;
+      DB.directMessages.push(msg);
+      addNotification(userId, "message", { sender: me.name, senderId: me.id, text });
+      persist(); return msg;
     }
     const { data, error } = await supa.from("rb_direct_messages")
       .insert({ id: msg.id, sender_id: me.id, receiver_id: userId, text })
       .select().single();
     if (error) throw new Error(friendlyDbError(error));
     DB.directMessages.push({ id: data.id, senderId: data.sender_id, receiverId: data.receiver_id, text: data.text, createdAt: data.created_at });
+    notifyRemote({ type: "message", recipientId: userId, senderId: me.id, sender: me.name, text }).catch(() => {});
     return msg;
   }
 
@@ -584,10 +595,13 @@
     if (DB.friendRequests.some(f => f.fromUser === me.id && f.toUser === userId && f.status === "pending")) return { already: "pending" };
     const row = { id: uid("fr"), fromUser: me.id, toUser: userId, status: "pending", createdAt: new Date().toISOString() };
     if (mode === "demo") {
-      DB.friendRequests.push(row); persist(); return { ok: true };
+      DB.friendRequests.push(row);
+      addNotification(userId, "friend", { sender: me.name, senderId: me.id, requestId: row.id });
+      persist(); return { ok: true };
     }
     await ins("rb_friend_requests", { id: row.id, from_user: me.id, to_user: userId, status: "pending" });
     await refreshCloud();
+    notifyRemote({ type: "friend", recipientId: userId, senderId: me.id, sender: me.name, requestId: row.id }).catch(() => {});
     return { ok: true };
   }
 
@@ -599,6 +613,337 @@
     }
     await upd("rb_friend_requests", id, { status });
     await refreshCloud();
+  }
+
+  // ---- notifications ----------------------------------------------------
+  // Cloud: rows are written by the rb-notify Edge Function (the browser has no
+  // INSERT grant on rb_notifications, on purpose) and arrive live over Realtime.
+  // Demo: written straight into localStorage so the flow can be tested on one
+  // phone by switching demo users.
+  function addNotification(userId, type, payload) {
+    const ev = payload || {};
+    const w = (window.RBNotifyText && window.RBNotifyText.wording)
+      ? window.RBNotifyText.wording(ev)
+      : { title: ev.title || "RegisterBook" };
+    const n = {
+      id: uid("nt"),
+      userId,
+      type,
+      title: w.title,
+      body: ev.text ? String(ev.text).slice(0, 60) : (w.body || ""),
+      data: { senderId: ev.senderId || "", groupId: ev.groupId || "", code: ev.code || "", callId: ev.callId || "", inviteId: ev.inviteId || "", requestId: ev.requestId || "", kind: ev.kind || "" },
+      read: false,
+      createdAt: new Date().toISOString()
+    };
+    DB.notifications.push(n);
+    return n;
+  }
+  function notifications() {
+    return DB.notifications
+      .filter(n => n.userId === (me && me.id))
+      .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
+  }
+  function unreadNotifications() { return notifications().filter(n => !n.read); }
+  async function markNotificationRead(id) {
+    const n = DB.notifications.find(x => x.id === id);
+    if (n) n.read = true;
+    if (mode !== "demo") { try { await upd("rb_notifications", id, { read: true }); } catch (e) {} }
+    else persist();
+  }
+  async function markAllNotificationsRead() {
+    notifications().forEach(n => { n.read = true; });
+    if (mode !== "demo") {
+      try { await supa.from("rb_notifications").update({ read: true }).eq("user_id", me.id).eq("read", false); } catch (e) {}
+    } else persist();
+  }
+  async function clearNotification(id) {
+    DB.notifications = DB.notifications.filter(n => n.id !== id);
+    if (mode !== "demo") { try { await del("rb_notifications", "id", id); } catch (e) {} }
+    else persist();
+  }
+
+  // ---- group invites ----------------------------------------------------
+  function incomingInvites() {
+    return DB.groupInvites.filter(i => i.status === "pending"
+      && i.createdBy !== (me && me.id)
+      && (i.invitedUserId === (me && me.id) || !i.invitedUserId));
+  }
+  // Reads an invite by code even when RLS hides the row (open link invites).
+  async function previewInvite(code) {
+    if (mode === "demo") {
+      const inv = DB.groupInvites.find(i => i.code === String(code || "").toUpperCase());
+      if (!inv) return null;
+      const g = DB.groups.find(x => x.id === inv.groupId) || {};
+      return {
+        code: inv.code, status: inv.status, groupId: g.id, groupName: g.name || "a group",
+        fromName: profile(inv.createdBy).name, fromAvatar: profile(inv.createdBy).avatar,
+        memberCount: DB.groupMembers.filter(m => m.groupId === inv.groupId).length
+      };
+    }
+    const { data, error } = await supa.rpc("rb_invite_preview", { invite_code: code });
+    if (error) throw new Error(friendlyDbError(error));
+    return data || null;
+  }
+  function invitesForGroup(groupId) {
+    return DB.groupInvites.filter(i => i.groupId === groupId);
+  }
+  function invitesISent() {
+    return DB.groupInvites.filter(i => i.createdBy === (me && me.id));
+  }
+  async function invitePersonToGroup(groupId, userId) {
+    const n = (window.RBNotifyText || {});
+    const code = n.randomCode ? n.randomCode(8) : Math.random().toString(36).slice(2, 10).toUpperCase();
+    const row = {
+      id: uid("inv"), groupId, code, invitedUserId: userId || null, invitedEmail: null,
+      createdBy: me.id, status: "pending", createdAt: new Date().toISOString(), respondedAt: null
+    };
+    if (mode === "demo") {
+      DB.groupInvites.push(row);
+      persist();
+      if (userId) addNotification(userId, "invite", {
+        inviter: me.name, group: (DB.groups.find(g => g.id === groupId) || {}).name || "a group",
+        code, inviteId: row.id, groupId
+      });
+      persist();
+      return row;
+    }
+    const { data, error } = await supa.from("rb_group_invites")
+      .insert({ group_id: groupId, code, invited_user_id: userId || null, created_by: me.id })
+      .select().single();
+    if (error) throw new Error(friendlyDbError(error));
+    const saved = { id: data.id, groupId: data.group_id, code: data.code, invitedUserId: data.invited_user_id, createdBy: data.created_by, status: data.status, createdAt: data.created_at };
+    DB.groupInvites.push(saved);
+    if (userId) {
+      const p = profile(userId);
+      await notifyRemote({
+        type: "invite", recipientId: userId, inviteId: saved.id, groupId,
+        inviter: me.name, group: (DB.groups.find(g => g.id === groupId) || {}).name || "a group", code
+      });
+    }
+    return saved;
+  }
+  async function createGroupInviteLink(groupId) {
+    return invitePersonToGroup(groupId, null);
+  }
+  async function acceptInvite(codeOrId) {
+    const inv = DB.groupInvites.find(i => i.code === codeOrId || i.id === codeOrId);
+    if (mode === "demo") {
+      if (!inv) throw new Error("That invite link is not valid.");
+      if (inv.status !== "pending") throw new Error("That invite was already " + inv.status + ".");
+      if (inv.invitedUserId && inv.invitedUserId !== me.id) throw new Error("That invite was sent to someone else.");
+      inv.status = "accepted";
+      inv.invitedUserId = inv.invitedUserId || me.id;
+      inv.respondedAt = new Date().toISOString();
+      if (!DB.groupMembers.some(m => m.groupId === inv.groupId && m.userId === me.id)) {
+        DB.groupMembers.push({ groupId: inv.groupId, userId: me.id });
+      }
+      persist();
+      return inv.groupId;
+    }
+    const inv2 = inv || DB.groupInvites.find(i => i.id === codeOrId);
+    const code = inv2 ? inv2.code : codeOrId;
+    const { data, error } = await supa.rpc("rb_accept_group_invite", { invite_code: code });
+    if (error) throw new Error(friendlyDbError(error));
+    await refreshCloud();
+    return data;
+  }
+  async function declineInvite(codeOrId) {
+    const inv = DB.groupInvites.find(i => i.code === codeOrId || i.id === codeOrId);
+    if (mode === "demo") {
+      if (!inv) throw new Error("That invite link is not valid.");
+      if (inv.invitedUserId && inv.invitedUserId !== me.id) throw new Error("That invite was sent to someone else.");
+      inv.status = "declined";
+      inv.invitedUserId = inv.invitedUserId || me.id;
+      inv.respondedAt = new Date().toISOString();
+      persist();
+      return inv.groupId;
+    }
+    const code = inv ? inv.code : codeOrId;
+    const { data, error } = await supa.rpc("rb_decline_group_invite", { invite_code: code });
+    if (error) throw new Error(friendlyDbError(error));
+    await refreshCloud();
+    return data;
+  }
+
+  // ---- push subscriptions -----------------------------------------------
+  async function savePushSubscription(sub) {
+    const row = {
+      userId: me.id, endpoint: sub.endpoint,
+      p256dh: sub.keys ? sub.keys.p256dh : "", auth: sub.keys ? sub.keys.auth : "",
+      userAgent: (navigator && navigator.userAgent) ? String(navigator.userAgent).slice(0, 200) : ""
+    };
+    if (mode === "demo") { persist(); return row; }
+    const { error } = await supa.from("rb_push_subscriptions").upsert({
+      user_id: row.userId, endpoint: row.endpoint, p256dh: row.p256dh, auth: row.auth, user_agent: row.userAgent
+    }, { onConflict: "endpoint" });
+    if (error) throw new Error(friendlyDbError(error));
+    return row;
+  }
+  async function deletePushSubscription(endpoint) {
+    if (mode === "demo") return;
+    const { error } = await supa.from("rb_push_subscriptions").delete().eq("endpoint", endpoint);
+    if (error) throw new Error(friendlyDbError(error));
+  }
+
+  // ---- calls ------------------------------------------------------------
+  async function startCall(userId, kind) {
+    const k = kind === "video" ? "video" : "audio";
+    if (mode === "demo") {
+      const call = { id: uid("call"), callerId: me.id, calleeId: userId, kind: k, status: "ringing", createdAt: new Date().toISOString(), answeredAt: null, endedAt: null };
+      DB.calls.push(call);
+      addNotification(userId, "call", { caller: me.name, kind: k, callId: call.id, senderId: me.id });
+      persist();
+      return call;
+    }
+    const { data, error } = await supa.from("rb_calls")
+      .insert({ caller_id: me.id, callee_id: userId, kind: k, status: "ringing" })
+      .select().single();
+    if (error) throw new Error(friendlyDbError(error));
+    const call = { id: data.id, callerId: data.caller_id, calleeId: data.callee_id, kind: data.kind, status: data.status, createdAt: data.created_at, answeredAt: null, endedAt: null };
+    DB.calls.push(call);
+    await notifyRemote({ type: "call", recipientId: userId, callId: call.id, caller: me.name, kind: k, senderId: me.id });
+    return call;
+  }
+  async function updateCallStatus(callId, status) {
+    const patch = { status };
+    if (status === "accepted") patch.answered_at = new Date().toISOString();
+    if (status === "ended" || status === "declined" || status === "missed") patch.ended_at = new Date().toISOString();
+    const c = DB.calls.find(x => x.id === callId);
+    if (c) Object.assign(c, { status, answeredAt: patch.answered_at || c.answeredAt, endedAt: patch.ended_at || c.endedAt });
+    if (mode === "demo") { persist(); return; }
+    const { error } = await supa.from("rb_calls").update(patch).eq("id", callId);
+    if (error) throw new Error(friendlyDbError(error));
+  }
+  function activeCall() {
+    return DB.calls.find(c => c.status === "ringing" || c.status === "accepted") || null;
+  }
+  async function sendCallSignal(callId, kind, payload) {
+    const row = { id: uid("sig"), callId, fromUser: me.id, kind, payload, createdAt: new Date().toISOString() };
+    if (mode === "demo") { DB.callSignals.push(row); persist(); return row; }
+    const { error } = await supa.from("rb_call_signals")
+      .insert({ call_id: callId, from_user: me.id, kind, payload });
+    if (error) throw new Error(friendlyDbError(error));
+    return row;
+  }
+  function callSignals(callId) {
+    return DB.callSignals.filter(s => s.callId === callId).sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)));
+  }
+  async function fetchCallSignals(callId) {
+    if (mode === "demo") return callSignals(callId);
+    const rows = await sel(supa.from("rb_call_signals").select("*").eq("call_id", callId).order("id", { ascending: true }), "call signals");
+    return rows.map(s => ({ id: String(s.id), callId: s.call_id, fromUser: s.from_user, kind: s.kind, payload: s.payload, createdAt: s.created_at }));
+  }
+
+  // ---- remote push (Edge Function) --------------------------------------
+  // Returns { ok, delivered, reason }. Never throws: a failed push must not
+  // stop the message/request/invite from being saved.
+  async function notifyRemote(ev) {
+    const url = (window.RB_CONFIG && window.RB_CONFIG.edgeUrl) ? window.RB_CONFIG.edgeUrl("rb-notify") : "";
+    if (!url || !supa) return { ok: false, delivered: 0, reason: "not-configured" };
+    try {
+      const sess = await window.RBAuth.getSession();
+      if (!sess || !sess.access_token) return { ok: false, delivered: 0, reason: "no-session" };
+      const res = await fetch(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          apikey: String((window.RB_CONFIG || {}).SUPABASE_ANON_KEY || ""),
+          Authorization: "Bearer " + sess.access_token
+        },
+        body: JSON.stringify(ev)
+      });
+      if (!res.ok) {
+        let msg = "HTTP " + res.status;
+        try { const j = await res.json(); if (j && j.error) msg = j.error; } catch (e) {}
+        return { ok: false, delivered: 0, reason: msg };
+      }
+      const j = await res.json();
+      return { ok: true, delivered: (j && j.delivered) || 0, reason: "" };
+    } catch (e) {
+      return { ok: false, delivered: 0, reason: (e && e.message) || "network" };
+    }
+  }
+
+  // ---- delete my account ------------------------------------------------
+  function accountSummary() {
+    const myRegs = DB.registers.filter(r => r.ownerId === me.id);
+    const myRegIds = myRegs.map(r => r.id);
+    return {
+      registers: myRegs.length,
+      lines: DB.entries.filter(e => myRegIds.indexOf(e.registerId) >= 0).length,
+      shares: DB.shares.filter(s => myRegIds.indexOf(s.registerId) >= 0).length,
+      groups: DB.groups.filter(g => g.createdBy === me.id).length,
+      memberships: DB.groupMembers.filter(m => m.userId === me.id).length,
+      messages: DB.directMessages.filter(m => m.senderId === me.id || m.receiverId === me.id).length,
+      groupMessages: DB.groupMessages.filter(m => m.senderId === me.id).length,
+      friends: friends().length
+    };
+  }
+  function exportMyBooks() {
+    const myRegs = DB.registers.filter(r => r.ownerId === me.id);
+    const lines = [];
+    lines.push("RegisterBook — my books");
+    lines.push("Exported: " + new Date().toLocaleString());
+    lines.push("Account: " + me.name + " <" + (me.email || "") + ">");
+    lines.push("");
+    myRegs.forEach(reg => {
+      lines.push("========================================");
+      lines.push(reg.name + "  (" + reg.type + ")");
+      lines.push("Created: " + new Date(reg.createdAt).toLocaleDateString());
+      lines.push("----------------------------------------");
+      const es = entriesOf(reg.id);
+      if (!es.length) lines.push("(no lines yet)");
+      es.forEach((e, i) => {
+        let row = String(i + 1).padStart(3, " ") + ". " + (e.date || "") + "  " + e.text;
+        if (e.qty != null) row += "  qty:" + e.qty;
+        if (e.amount != null) row += "  Rs." + e.amount;
+        if (e.done) row += "  [done]";
+        lines.push(row);
+      });
+      if (reg.type === "Bill Book") {
+        lines.push("----------------------------------------");
+        lines.push("TOTAL Rs." + es.reduce((s, e) => s + (Number(e.amount) || 0), 0));
+      }
+      lines.push("");
+    });
+    return lines.join("\n");
+  }
+  async function requestAccountDeletion(reason) {
+    if (mode === "demo") {
+      DB.accountDeletions.push({ id: uid("del"), userId: me.id, reason, status: "requested", createdAt: new Date().toISOString() });
+      persist();
+      return { ok: true, mode: "demo" };
+    }
+    const { error } = await supa.from("rb_account_deletions")
+      .insert({ user_id: me.id, email: me.email || null, reason: reason || null });
+    if (error) throw new Error(friendlyDbError(error));
+    return { ok: true, mode: "requested" };
+  }
+  // Really deletes the signed-in user. Needs the rb-delete-account Edge
+  // Function (only it holds the service_role key). If that function is not
+  // deployed yet we say so honestly instead of pretending.
+  async function deleteAccountNow() {
+    const url = (window.RB_CONFIG && window.RB_CONFIG.edgeUrl) ? window.RB_CONFIG.edgeUrl("rb-delete-account") : "";
+    if (!url || !supa) return { ok: false, reason: "not-configured" };
+    const sess = await window.RBAuth.getSession();
+    if (!sess || !sess.access_token) return { ok: false, reason: "no-session" };
+    try {
+      const res = await fetch(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          apikey: String((window.RB_CONFIG || {}).SUPABASE_ANON_KEY || ""),
+          Authorization: "Bearer " + sess.access_token
+        },
+        body: JSON.stringify({ confirm: "DELETE" })
+      });
+      let j = {};
+      try { j = await res.json(); } catch (e) {}
+      if (!res.ok) return { ok: false, reason: j.error || ("HTTP " + res.status) };
+      return { ok: true, summary: j.summary || null };
+    } catch (e) {
+      return { ok: false, reason: (e && e.message) || "network" };
+    }
   }
 
   // ---- public API ----
@@ -618,6 +963,13 @@
     createRegister, addEntry, updateEntry, deleteEntry, deleteRegister,
     shareWithUser, shareWithGroup, removeShare,
     createGroup, addGroupMember, sendGroupMessage, sendDirectMessage,
-    sendFriendRequest, respondFriendRequest
+    sendFriendRequest, respondFriendRequest,
+    notifications, unreadNotifications, markNotificationRead, markAllNotificationsRead, clearNotification,
+    incomingInvites, invitesForGroup, invitesISent,
+    invitePersonToGroup, createGroupInviteLink, acceptInvite, declineInvite, previewInvite,
+    savePushSubscription, deletePushSubscription,
+    startCall, updateCallStatus, activeCall, sendCallSignal, callSignals, fetchCallSignals,
+    notifyRemote,
+    accountSummary, exportMyBooks, requestAccountDeletion, deleteAccountNow
   };
 })();

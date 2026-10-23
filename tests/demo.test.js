@@ -33,7 +33,7 @@ function loadApp(opts) {
       projectRef() { return ""; }
     };
   }
-  ["auth.js", "store.js", "app.js"].forEach(f => w.eval(fs.readFileSync(path.join(ROOT, f), "utf8")));
+  ["notify.js", "auth.js", "store.js", "push.js", "rtc.js", "app.js"].forEach(f => w.eval(fs.readFileSync(path.join(ROOT, f), "utf8")));
   return { dom, w, doc: w.document };
 }
 const tick = (ms = 0) => new Promise(r => setTimeout(r, ms));
@@ -299,12 +299,15 @@ test("people & friends: request → accept, then private chat messages", async (
   w.openChat("mahi");
   assert.match(doc.getElementById("chatMsgs").textContent, /Hello Rahul/, "Rahul receives the message");
 
-  // demo call is explicitly labelled as a demo
+  // the call screen opens, and in demo mode it says plainly that there is no
+  // second phone — it never pretends a call is connected
   doc.querySelector('button[onclick*="startCall"]').click();
-  assert.ok(doc.getElementById("callOverlay").style.display === "flex");
-  assert.match(doc.getElementById("callOverlay").textContent, /Demo call screen/i);
-  w.endCall();
-  assert.equal(doc.getElementById("callOverlay").style.display, "none");
+  const overlay = doc.getElementById("callOverlay");
+  assert.equal(overlay.style.display, "flex", "call screen opens");
+  assert.match(overlay.textContent, /Ringing|no second phone|demo/i, "demo call is labelled honestly");
+  assert.ok(overlay.querySelector("#callActions .btn-end"), "there is an end-call button");
+  w.hideCallScreen();
+  assert.equal(overlay.style.display, "none", "call screen closes");
 
   dom.window.close();
 });

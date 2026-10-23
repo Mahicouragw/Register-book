@@ -29,6 +29,8 @@
     person: null,
     share: { regId: null, userId: null, groupId: "" },
     addMemberGroupId: null,
+    invite: { groupId: null, userId: null, code: "" },
+    call: null,
     busy: false,
     timer: null,
     booted: false
@@ -317,65 +319,37 @@
     document.body.classList.toggle("sidebar-open", !!open);
   }
 
-  // ---------------------------------------------------------------- render: sidebar + topbar
-  function renderSidebar() {
+  // ---------------------------------------------------------------- render: header + topbar
+  // ---------------------------------------------------------------- render: header
+  function renderHeader() {
     const me = S.me;
     if (!me) return;
-    const badge = $("#modeBadge"), badgeM = $("#modeBadgeMobile");
     const demo = S.isDemo();
+    const badge = $("#modeBadge");
     if (badge) {
-      badge.textContent = demo ? "Demo mode" : "Google account";
+      badge.textContent = demo ? "Demo" : "Google";
       badge.className = "mode-badge " + (demo ? "mode-demo" : "mode-real");
     }
-    if (badgeM) {
-      badgeM.textContent = demo ? "Demo" : "Google";
-      badgeM.className = "mode-badge " + (demo ? "mode-demo" : "mode-real");
+    const unread = (S.unreadNotifications ? S.unreadNotifications() : []).length;
+    const invites = (S.incomingInvites ? S.incomingInvites() : []).length;
+    const n = unread + invites;
+    const bell = $("#bellCount");
+    if (bell) {
+      bell.textContent = n > 99 ? "99+" : String(n);
+      bell.hidden = n === 0;
     }
-
-    const card = $("#accountCard");
-    if (card) {
-      card.innerHTML = `
-        ${avatar(me, "acct-avatar")}
-        <div class="acct-info">
-          <div class="acct-name">${esc(me.name)} <span class="${demo ? "demo-badge" : "real-badge"}">${demo ? "Demo" : "Google ✓"}</span></div>
-          <div class="acct-email">${esc(me.email || (demo ? "demo account" : ""))}</div>
-        </div>
-        <button class="btn btn-sm btn-ghost" onclick="handleSignOut()">${demo ? "Exit" : "Sign out"}</button>`;
-    }
-
-    const switchBox = $("#demoSwitch");
-    if (switchBox) switchBox.style.display = demo ? "block" : "none";
-    const resetWrap = $("#demoResetWrap");
-    if (resetWrap) resetWrap.style.display = demo ? "block" : "none";
-    const sel = $("#demoUserSelect");
-    if (sel && demo) {
-      sel.innerHTML = S.demoUsers().map(u => `<option value="${u.id}">${esc(u.name)} — ${esc(u.email)}</option>`).join("");
-      sel.value = me.id;
-      sel.onchange = e => enterDemo(e.target.value);
-    }
-
-    const counts = {
-      countMy: S.myRegisters().length,
-      countShared: S.sharedWithMe().length,
-      countGroups: S.myGroups().length,
-      countPeople: S.pendingIncoming().length ? `${S.pendingIncoming().length} new` : "",
-      countChats: S.data.directMessages.length ? String(S.data.directMessages.length) : ""
-    };
-    Object.keys(counts).forEach(id => {
-      const el = document.getElementById(id);
-      if (el) el.textContent = counts[id];
-    });
+    const bb = $("#bellBtn");
+    if (bb) bb.setAttribute("aria-label", n ? `Notifications, ${n} unread` : "Notifications, none unread");
     const today = $("#todayPreview");
     if (today) today.textContent = fmtFull(new Date());
   }
 
   const TITLES = {
-    home: ["Community Home", "Registers shared with you + your community"],
-    myRegisters: ["My Registers", "Every book you created — unlimited pages"],
-    shared: ["Shared With Me", "Read & search anything — only the creator can edit"],
-    people: ["People & Friends", "Find staff, send requests, then share registers"],
-    groups: ["Groups", "Create a group, chat, share a register to everyone at once"],
-    chats: ["Private Chats", "1-to-1 messages + demo call screen"],
+    home: ["Home", "Today, your books, and what is new for you"],
+    library: ["Library", "My register books + books shared with me"],
+    community: ["Community", "People, friends, groups and chats"],
+    settings: ["Settings", "Your account, notifications and legal"],
+    inbox: ["Notifications", "Messages, friend requests, group invites and calls"],
     registerDetail: ["Register book", "10 lines per page • unlimited pages"]
   };
   function renderTopbar() {
@@ -386,27 +360,36 @@
     const actions = $("#topActions");
     if (!actions) return;
     let html = "";
-    if (state.view === "home" || state.view === "myRegisters") {
+    if (state.view === "library") {
       html += `<button class="btn btn-sm btn-primary" onclick="openCreateModal()">+ Create Register</button>`;
     }
-    if (state.view === "people") {
-      html += `<button class="btn btn-sm btn-primary" onclick="openCreateModal()">+ Create Register</button>`;
-    }
-    if (state.view === "groups") {
+    if (state.view === "community" && !state.groupId) {
       html += `<button class="btn btn-sm btn-primary" onclick="openGroupModal()">+ Create Group</button>`;
     }
+    if (state.view === "inbox") {
+      html += `<button class="btn btn-sm" onclick="markAllNotificationsRead()">Mark all read</button>`;
+    }
     if (state.view === "registerDetail") {
-      html += `<button class="btn btn-sm" onclick="setView('${state.reg.id ? "myRegisters" : "home"}')">← Back to books</button>`;
+      html += `<button class="btn btn-sm" onclick="backToLibrary()">← Back to books</button>`;
       const reg = regById(state.reg.id);
       if (reg && canEdit(reg)) {
         html += `<button class="btn btn-sm btn-primary" onclick="openShareModal('${reg.id}')">Share</button>`;
         html += `<button class="btn btn-sm btn-ghost" style="color:#dc2626" onclick="deleteRegister('${reg.id}')">Delete book</button>`;
       }
     }
-    if (!S.isDemo() && (state.view === "shared" || state.view === "chats" || state.view === "groups" || state.view === "people")) {
+    if (!S.isDemo() && (state.view === "community" || state.view === "library" || state.view === "inbox")) {
       html += `<button class="btn btn-sm" onclick="manualRefresh()">↻ Refresh</button>`;
     }
     actions.innerHTML = html;
+    const bar = $("#subbar");
+    if (bar) bar.style.display = "flex";
+  }
+
+  // Which tab is "current" when a sub-screen (inbox, a register, a chat) is open.
+  function tabForView(name) {
+    if (name === "registerDetail") return "library";
+    if (name === "inbox") return "home";
+    return name;
   }
 
   // ---------------------------------------------------------------- views
@@ -420,7 +403,18 @@
     $$(".view").forEach(v => { v.style.display = "none"; });
     const target = document.getElementById("view-" + state.view);
     if (target) target.style.display = "block";
-    $$(".nav-item").forEach(n => n.classList.toggle("active", n.dataset.view === state.view));
+    const tab = tabForView(state.view);
+    $$(".tab").forEach(n => {
+      const on = n.dataset.view === tab;
+      n.classList.toggle("active", on);
+      n.setAttribute("aria-selected", on ? "true" : "false");
+    });
+    try { window.scrollTo(0, 0); } catch (e) {}
+  }
+  function backToLibrary() {
+    state.reg = { id: null, page: 1, highlightDate: null };
+    state.insideSearch = "";
+    setView("library");
   }
 
   function setupBanner() {
@@ -452,60 +446,99 @@
     </div>`;
   }
 
+  // ---------------------------------------------------------------- notification rows
+  function notifIcon(t) {
+    return t === "call" ? "📞" : t === "friend" ? "🧑‍🤝‍🧑" : t === "invite" ? "👥" : t === "system" ? "🔔" : "💬";
+  }
+  function notifActionsHtml(n) {
+    const d = n.data || {};
+    if (n.type === "friend") {
+      return `<button class="btn btn-sm btn-primary" onclick="event.stopPropagation();actFriend('${esc(d.requestId || n.id)}','accepted')">Accept</button>
+              <button class="btn btn-sm" onclick="event.stopPropagation();actFriend('${esc(d.requestId || n.id)}','declined')">Decline</button>`;
+    }
+    if (n.type === "invite") {
+      return `<button class="btn btn-sm btn-primary" onclick="event.stopPropagation();joinGroup('${esc(d.code || "")}')">Join</button>
+              <button class="btn btn-sm" onclick="event.stopPropagation();declineGroupInvite('${esc(d.code || "")}')">Decline</button>`;
+    }
+    if (n.type === "call") {
+      return `<button class="btn btn-sm btn-primary" onclick="event.stopPropagation();answerCall('${esc(d.callId || "")}')">Answer</button>
+              <button class="btn btn-sm" onclick="event.stopPropagation();declineCall('${esc(d.callId || "")}')">Decline</button>`;
+    }
+    return `<button class="btn btn-sm btn-primary" onclick="event.stopPropagation();openNotification('${esc(n.id)}')">Open</button>`;
+  }
+  function notifRow(n) {
+    return `<div class="list-item ${n.read ? "" : "unread"}" onclick="openNotification('${esc(n.id)}')">
+      <div style="width:40px;height:40px;border-radius:10px;background:${n.read ? "#f3f4f6" : "#ecfdf5"};display:grid;place-items:center;font-size:18px">${notifIcon(n.type)}</div>
+      <div class="flex1">
+        <div class="strong">${esc(n.title)}</div>
+        <div class="small muted">${esc(n.body || "")}${n.body ? " • " : ""}${esc(fmtDay(n.createdAt))}</div>
+      </div>
+      <div class="row" style="gap:6px">${notifActionsHtml(n)}</div>
+    </div>`;
+  }
+  function inviteRow(inv) {
+    const g = S.data.groups.find(x => x.id === inv.groupId);
+    const from = profileOf(inv.createdBy);
+    return `<div class="list-item unread">
+      <div style="width:40px;height:40px;border-radius:10px;background:#eff6ff;display:grid;place-items:center;font-size:18px">👥</div>
+      <div class="flex1">
+        <div class="strong">You're invited to ${esc(g ? g.name : "a group")}</div>
+        <div class="small muted">From ${esc(from.name)} • ${esc(fmtDay(inv.createdAt))}</div>
+      </div>
+      <div class="row" style="gap:6px">
+        <button class="btn btn-sm btn-primary" onclick="joinGroup('${esc(inv.code)}')">Join</button>
+        <button class="btn btn-sm" onclick="declineGroupInvite('${esc(inv.code)}')">Decline</button>
+      </div>
+    </div>`;
+  }
+
+  // ---------------------------------------------------------------- HOME
   function renderHome() {
     const c = $("#view-home");
     if (!c) return;
-    const my = S.myRegisters();
-    const shared = S.sharedWithMe();
-    const groups = S.myGroups();
     const me = S.me;
+    const my = S.myRegisters();
+    const unread = S.unreadNotifications ? S.unreadNotifications() : [];
+    const invites = S.incomingInvites ? S.incomingInvites() : [];
+    const newCount = unread.length + invites.length;
+    const now = new Date();
+
     c.innerHTML = `
       ${setupBanner()}
-      <div class="card" style="background:linear-gradient(120deg,#ecfdf5,#f0f9ff);border-color:#a7f3d0">
-        <div class="card-pad">
-          <div class="row" style="justify-content:space-between">
-            <div>
-              <div style="font-size:20px;font-weight:800">Hi ${esc(me.name)} 👋</div>
-              <div class="small muted" style="margin-top:2px">Today is <b>${esc(fmtFull(new Date()))}</b> — it is filled in automatically when you write.</div>
-            </div>
-            <div class="row">
-              <button class="btn btn-primary btn-sm" onclick="openCreateModal()">+ Create Register</button>
-              <button class="btn btn-sm" onclick="setView('shared')">Shared with me (${shared.length})</button>
-            </div>
-          </div>
-        </div>
+
+      <div class="card hero">
+        <div class="hero-date" id="todayPreview">${esc(fmtFull(now))}</div>
+        <div class="hero-hi">Hello, ${esc(me.name)} 👋</div>
+        <div class="hero-sub">Write a line and today's date is saved for you automatically.</div>
+        <button class="btn btn-primary btn-xl btn-block" onclick="openCreateModal()">＋ Create a register book</button>
       </div>
 
-      <div class="grid grid-3 mt12">
-        <div class="card kpi"><div class="kpi-icon" style="background:#ecfdf5;color:#065f46">📒</div><div class="kpi-num" id="kpiMine">${my.length}</div><div class="kpi-label">My registers</div><div class="small muted mt8">Unlimited books on one phone</div></div>
-        <div class="card kpi"><div class="kpi-icon" style="background:#eff6ff;color:#1d4ed8">👁️</div><div class="kpi-num" id="kpiShared">${shared.length}</div><div class="kpi-label">Shared with me (view only)</div><div class="small muted mt8">Search works, edit is blocked</div></div>
-        <div class="card kpi"><div class="kpi-icon" style="background:#fef3c7;color:#92400e">👥</div><div class="kpi-num" id="kpiGroups">${groups.length}</div><div class="kpi-label">My groups</div><div class="small muted mt8">${groups.length ? groups.map(g => esc(g.name)).join(", ") : "Create a group to share with everyone"}</div></div>
-      </div>
-
-      <div class="grid grid-2 mt12">
-        <div class="card">
-          <div class="card-head"><h3>Community — shared with me</h3><span class="badge badge-green">${shared.length} book${shared.length === 1 ? "" : "s"}</span></div>
-          <div class="list">
-            ${shared.length ? shared.slice(0, 5).map(r => registerRow(r, { showOwner: true })).join("") :
-              `<div class="empty"><div class="big">No shared books yet</div><div class="small">${S.isDemo() ? "Try the story: switch to Goldfish, share a register with Silverfish, then switch to Silverfish." : "When a colleague shares a register with you it appears here — view only."}</div>${S.isDemo() ? `<button class="btn btn-sm mt8" onclick="demoStory()">Run Goldfish → Silverfish test</button>` : ""}</div>`}
-          </div>
+      ${newCount ? `
+      <div class="card mt12">
+        <div class="card-head">
+          <h3>New for you</h3>
+          <span class="badge badge-green">${newCount} new</span>
+          <button class="btn btn-sm" onclick="openInbox()">Open inbox</button>
         </div>
-        <div class="card">
-          <div class="card-head"><h3>My registers</h3><button class="btn btn-sm btn-primary" onclick="openCreateModal()">+ Create</button></div>
-          <div class="list">
-            ${my.length ? my.slice(0, 5).map(r => registerRow(r)).join("") :
-              `<div class="empty"><div class="big">You have no registers</div><div class="small">Create one — today's date is filled in automatically.</div><button class="btn btn-sm btn-primary mt8" onclick="openCreateModal()">+ Create register</button></div>`}
-          </div>
+        <div class="list">
+          ${invites.map(inviteRow).join("")}
+          ${unread.slice(0, 4).map(notifRow).join("")}
         </div>
-      </div>
+      </div>` : `
+      <div class="card mt12">
+        <div class="card-head"><h3>New for you</h3><span class="badge badge-gray">Nothing new</span></div>
+        <div class="card-pad small muted">Messages, friend requests, group invites and calls land here — and on your lock screen if you switch notifications on in Settings.</div>
+      </div>`}
 
       <div class="card mt12">
-        <div class="card-head"><h3>How sharing works (view-only)</h3><span class="badge">Enforced in the database</span></div>
-        <div class="card-pad small" style="line-height:1.65">
-          <b>Goldfish</b> writes 20–30 pages of a medicine checklist and shares it with <b>Silverfish</b>.
-          Silverfish can open it, read every page and search by date or month — but <b>cannot add, edit or delete anything</b>,
-          because Goldfish is the creator. Row Level Security in Supabase blocks writes from anyone else, so it is not just hidden buttons.
-          <div class="mt8 muted">Sharing ways: search a person's name → pick a register → share · share to a whole group · share from a private chat.</div>
+        <div class="card-head">
+          <h3>My books</h3>
+          <span class="badge">${my.length}</span>
+          <button class="btn btn-sm" onclick="setView('library')">See all →</button>
+        </div>
+        <div class="list">
+          ${my.length ? my.slice(0, 4).map(r => registerRow(r)).join("")
+            : `<div class="empty"><div class="big">No books yet</div><div class="small">Tap the big green button above to create your first register.</div></div>`}
         </div>
       </div>`;
   }
@@ -515,9 +548,12 @@
     if (!c) return;
     const regs = S.myRegisters();
     c.innerHTML = `
-      ${setupBanner()}
       <div class="card">
-        <div class="card-head"><h3>My Registers — ${regs.length}</h3><button class="btn btn-sm btn-primary" onclick="openCreateModal()">+ Create register</button></div>
+        <div class="card-head">
+          <h3>My register books — ${regs.length}</h3>
+          <span class="badge badge-green">OWNER — you can edit</span>
+          <button class="btn btn-sm btn-primary" onclick="openCreateModal()">+ Create register</button>
+        </div>
         <div class="list">
           ${regs.length ? regs.map(r => registerRow(r)).join("") :
             `<div class="empty"><div class="big">No registers yet</div><div class="small">Create your first book — name + type. The date is automatic.</div><button class="btn btn-primary mt8" onclick="openCreateModal()">+ Create register</button></div>`}
@@ -530,9 +566,11 @@
     if (!c) return;
     const regs = S.sharedWithMe();
     c.innerHTML = `
-      ${setupBanner()}
-      <div class="card">
-        <div class="card-head"><h3>Shared with me — ${regs.length}</h3><span class="badge badge-amber">View only — cannot edit</span></div>
+      <div class="card mt12">
+        <div class="card-head">
+          <h3>Shared with me — ${regs.length}</h3>
+          <span class="badge badge-amber">VIEW-ONLY — you can read and search, not edit</span>
+        </div>
         <div class="list">
           ${regs.length ? regs.map(r => registerRow(r, { showOwner: true })).join("") :
             `<div class="empty"><div class="big">Nothing shared with you yet</div><div class="small">${S.isDemo() ? "Open the medicine checklist as Goldfish and share it with Silverfish, then switch back here as Silverfish." : "Ask a colleague to share a register with you, or accept a friend request first."}</div>${S.isDemo() ? `<button class="btn btn-sm mt8" onclick="demoStory()">Run Goldfish → Silverfish test</button>` : ""}</div>`}
@@ -559,7 +597,7 @@
     const others = S.otherProfiles();
     const selected = state.person ? S.profile(state.person) : null;
     c.innerHTML = `
-      ${setupBanner()}
+      <div class="section-title">People &amp; friends</div>
       <div class="grid grid-2">
         <div class="card">
           <div class="card-head"><h3>Search people</h3><span class="badge">${others.length} staff</span></div>
@@ -641,6 +679,7 @@
           <div class="card-head">
             <h3>${esc(open.name)}</h3>
             <span class="badge">${members.length} members</span>
+            <button class="btn btn-sm btn-primary" onclick="openInviteModal('${open.id}')">Invite people</button>
             <button class="btn btn-sm" onclick="openAddMemberModal('${open.id}')">+ Add staff</button>
             <button class="btn btn-sm btn-primary" onclick="openShareToGroupModal('${open.id}')">Share register to group</button>
           </div>
@@ -667,9 +706,28 @@
       return;
     }
 
+    const pendingInvites = S.incomingInvites ? S.incomingInvites() : [];
     c.innerHTML = `
-      ${setupBanner()}
-      <div class="row" style="margin-bottom:12px">
+      <div class="section-title">Groups</div>
+      <div class="card">
+        <div class="card-head"><h3>Join a group</h3><span class="badge">Invite code</span></div>
+        <div class="card-pad">
+          <label class="small" for="joinCodeInput">Paste the invite code a colleague sent you (or open their invite link)</label>
+          <div class="row mt8">
+            <input id="joinCodeInput" class="code-input" placeholder="e.g. ABCD2345" autocomplete="off" maxlength="24">
+            <button class="btn btn-primary" onclick="joinGroup(document.getElementById('joinCodeInput').value)">Join group</button>
+          </div>
+          <div class="small muted mt8">Groups are private — nobody can see a group they have not been invited to.</div>
+        </div>
+      </div>
+
+      ${pendingInvites.length ? `
+      <div class="card mt12">
+        <div class="card-head"><h3>Invites waiting for you</h3><span class="badge badge-green">${pendingInvites.length}</span></div>
+        <div class="list">${pendingInvites.map(inviteRow).join("")}</div>
+      </div>` : ""}
+
+      <div class="row mt12" style="margin-bottom:12px">
         <button class="btn btn-primary" onclick="openGroupModal()">+ Create group</button>
         <span class="small muted">Add staff, chat, and share a register to the whole group at once.</span>
       </div>
@@ -712,7 +770,8 @@
               <div class="strong">${esc(p.name)} ${count ? `<span class="badge badge-gray">${count}</span>` : ""}</div>
               <div class="small muted">${last ? esc(last.text.slice(0, 60)) : "No messages yet — say hi"}</div>
             </div>
-            <button class="btn btn-sm" onclick="event.stopPropagation();startCall('${p.id}')">📞</button>
+            <button class="btn btn-sm" onclick="event.stopPropagation();startCall('${p.id}','audio')" aria-label="Audio call ${esc(p.name)}">📞 Audio</button>
+            <button class="btn btn-sm" onclick="event.stopPropagation();startCall('${p.id}','video')" aria-label="Video call ${esc(p.name)}">🎥 Video</button>
           </div>`).join("") : `<div class="empty small">No other people yet.</div>`}
       </div>
     </div>`;
@@ -723,7 +782,8 @@
         <div><div class="strong">${esc(selected.name)}</div><div class="small muted">${esc(selected.email)}</div></div>
         <div class="spacer"></div>
         <button class="btn btn-sm" onclick="stateChatBack()">← Chats</button>
-        <button class="btn btn-sm btn-primary" onclick="startCall('${selected.id}')">📞 Call</button>
+        <button class="btn btn-sm btn-primary" onclick="startCall('${selected.id}','audio')">📞 Audio call</button>
+        <button class="btn btn-sm btn-primary" onclick="startCall('${selected.id}','video')">🎥 Video call</button>
         <button class="btn btn-sm" onclick="openShareModalForUser('${selected.id}')">Share register</button>
       </div>
       <div class="chat-wrap">
@@ -738,9 +798,9 @@
           <button class="btn btn-primary" onclick="sendChat('${selected.id}')">Send</button>
         </div>
       </div>
-    </div>` : `<div class="card"><div class="empty"><div class="big">Select a chat</div><div class="small">Pick a person to message, or press 📞 to see the demo call screen.</div></div></div>`;
+    </div>` : `<div class="card"><div class="empty"><div class="big">Select a chat</div><div class="small">Pick a person to message. The 📞 Audio and 🎥 Video buttons place a real call over the internet.</div></div></div>`;
 
-    c.innerHTML = `${setupBanner()}<div class="${selected ? "grid grid-2" : ""}">${listHtml}${selected ? paneHtml : ""}</div>`;
+    c.innerHTML = `<div class="section-title">Private chats</div><div class="${selected ? "grid grid-2" : ""}">${listHtml}${selected ? paneHtml : ""}</div>`;
     setTimeout(scrollChats, 30);
   }
   function scrollChats() {
@@ -857,13 +917,21 @@
 
         ${editable ? `
         <div class="add-line">
-          <input type="date" id="newLineDate" value="${todayIso()}" title="Date for this line (today is pre-filled)">
-          <textarea id="newLineText" rows="1" placeholder="Write a line… (${esc(fmtFull(new Date()))} is already filled)"></textarea>
-          ${reg.type === "Bill Book" ? `<input id="newLineQty" type="number" min="0" step="1" placeholder="Qty"><input id="newLineAmt" type="number" min="0" step="0.01" placeholder="₹ Amount">` : ""}
-          <button class="btn btn-primary add-btn" onclick="addLine('${reg.id}')">Add</button>
+          <label class="sr-only" for="newLineText">Write a line</label>
+          <textarea id="newLineText" class="add-line-main" rows="2" placeholder="Write a line…" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();addLine('${reg.id}')}"></textarea>
+          ${reg.type === "Bill Book" ? `<input id="newLineQty" type="number" min="0" step="1" placeholder="Qty" aria-label="Quantity"><input id="newLineAmt" type="number" min="0" step="0.01" placeholder="₹ Amount" aria-label="Amount in rupees">` : ""}
+          <button class="btn btn-primary add-btn add-btn-xl" onclick="addLine('${reg.id}')">＋ Add line</button>
+          <div class="add-line-foot">
+            <button type="button" class="link-btn" id="lineDateToggle" onclick="toggleLineDate()" aria-expanded="false" aria-controls="lineDateWrap">Use a different date?</button>
+          </div>
+          <div class="add-line-date" id="lineDateWrap" hidden>
+            <label for="newLineDate">Date for this line (only if you are writing up an older day)</label>
+            <input type="date" id="newLineDate" value="${todayIso()}">
+            <button class="btn btn-sm" onclick="useTodayForLine()">Back to today</button>
+          </div>
         </div>
-        <div class="small muted" style="padding:0 16px 12px var(--rail)">When a page fills (10 lines), the next line moves to a new page automatically — we tell you.</div>`
-        : `<div class="small muted" style="padding:12px 16px 12px var(--rail);background:#fef2f2;border-top:1px solid #fecaca">Editing is disabled — you have view-only access. ${S.isDemo() ? `Switch to ${esc(owner.name)} in the sidebar demo switcher to edit.` : "Only the creator can change this register."}</div>`}
+        <div class="small muted" style="padding:0 16px 12px var(--rail)">Today's date is saved automatically. When a page fills (10 lines), the next line moves to a new page — we tell you.</div>`
+        : `<div class="small muted" style="padding:12px 16px 12px var(--rail);background:#fef2f2;border-top:1px solid #fecaca">Editing is disabled — you have view-only access. ${S.isDemo() ? `Switch to ${esc(owner.name)} in Settings → Demo switcher to edit.` : "Only the creator can change this register."}</div>`}
       </div>
 
       <div class="card mt12">
@@ -876,17 +944,323 @@
 
   function renderAll() {
     if (!S.me) return;
-    renderSidebar();
+    renderHeader();
     renderHome();
     renderMyRegisters();
     renderShared();
     renderPeople();
     renderGroups();
     renderChats();
+    renderInbox();
+    renderSettings();
     renderRegisterDetail();
     if (state.view === "registerDetail" && !regById(state.reg.id)) state.view = "home";
     renderTopbar();
     showView();
+  }
+
+  // ---------------------------------------------------------------- INBOX
+  function openInbox() {
+    state.view = "inbox";
+    renderInbox();
+    renderTopbar();
+    showView();
+  }
+  function renderInbox() {
+    const c = $("#view-inbox");
+    if (!c) return;
+    const list = S.notifications ? S.notifications() : [];
+    const invites = S.incomingInvites ? S.incomingInvites() : [];
+    c.innerHTML = `
+      ${invites.length ? `
+      <div class="card">
+        <div class="card-head"><h3>Group invites</h3><span class="badge badge-green">${invites.length} waiting</span></div>
+        <div class="list">${invites.map(inviteRow).join("")}</div>
+      </div>` : ""}
+
+      <div class="card ${invites.length ? "mt12" : ""}">
+        <div class="card-head">
+          <h3>Notifications</h3>
+          <span class="badge">${list.filter(n => !n.read).length} unread</span>
+          <button class="btn btn-sm" onclick="markAllNotificationsRead()">Mark all read</button>
+        </div>
+        <div class="list">
+          ${list.length ? list.map(notifRow).join("")
+            : `<div class="empty"><div class="big">Nothing here yet</div><div class="small">Messages, friend requests, group invites and calls will appear here — and on your lock screen when notifications are on.</div></div>`}
+        </div>
+      </div>
+
+      <div class="card mt12">
+        <div class="card-head"><h3>Make notifications work while the app is closed</h3></div>
+        <div class="card-pad small">
+          <button class="btn btn-sm btn-primary" onclick="setView('settings')">Open notification settings</button>
+          <div class="mt8 muted">On iPhone you must first use Share → Add to Home Screen, then open the app from the new icon.</div>
+        </div>
+      </div>`;
+  }
+  async function markAllNotificationsRead() {
+    if (!S.markAllNotificationsRead) return;
+    await S.markAllNotificationsRead();
+    renderAll();
+    toast("All notifications marked as read");
+  }
+  async function openNotification(id) {
+    const n = S.data.notifications.find(x => x.id === id);
+    if (!n) return;
+    if (!n.read) await S.markNotificationRead(id);
+    const d = n.data || {};
+    if (n.type === "message" && d.senderId) { setView("community"); openChat(d.senderId); renderAll(); return; }
+    if (n.type === "friend") { setView("community"); renderAll(); return; }
+    if (n.type === "invite" && d.code) { showJoinInvite(d.code); return; }
+    if (n.type === "call") { setView("community"); renderAll(); return; }
+    setView("home");
+    renderAll();
+  }
+  async function actFriend(requestId, status) {
+    try {
+      await S.respondFriendRequest(requestId, status);
+      toast(status === "accepted" ? "Friend request accepted ✓" : "Friend request declined");
+      renderAll();
+    } catch (e) { toast(e.message || "Could not update the request"); }
+  }
+  async function joinGroup(code) {
+    const cleaned = String(code || "").trim().toUpperCase().replace(/[^A-Z0-9]/g, "");
+    if (!cleaned) { toast("Type the invite code first"); return; }
+    try {
+      const gid = await S.acceptInvite(cleaned);
+      toast("You joined the group ✓");
+      closeJoinModal();
+      state.groupId = gid;
+      renderAll();
+      setView("community");
+    } catch (e) { toast(e.message || "Could not join the group"); }
+  }
+  async function declineGroupInvite(code) {
+    try {
+      await S.declineInvite(String(code || "").trim().toUpperCase());
+      toast("Invite declined");
+      renderAll();
+    } catch (e) { toast(e.message || "Could not decline the invite"); }
+  }
+  async function answerCall(callId) {
+    if (!callId) { toast("That call has already ended"); return; }
+    setView("community");
+    openCallScreen({ name: profileOf((S.data.calls.find(c => c.id === callId) || {}).callerId || "").name, kind: "audio", direction: "in" });
+    try { await window.RBRtc.answer(callId); }
+    catch (e) { showCallError(e.message || "Could not answer the call"); }
+  }
+  async function declineCall(callId) {
+    try {
+      await window.RBRtc.decline(callId);
+      toast("Call declined");
+      hideCallScreen();
+    } catch (e) { toast(e.message || "Could not decline"); }
+  }
+
+  // ---------------------------------------------------------------- SETTINGS
+  function renderSettings() {
+    const c = $("#view-settings");
+    if (!c) return;
+    const me = S.me;
+    const demo = S.isDemo();
+    c.innerHTML = `
+      <div class="card">
+        <div class="card-head">
+          <h3>My account</h3>
+          ${demo ? `<span class="badge badge-amber">Demo account</span>` : `<span class="badge badge-green">Google account ✓</span>`}
+        </div>
+        <div class="card-pad">
+          <div class="account-card" id="accountCard">
+            ${avatar(me, "acct-avatar")}
+            <div class="acct-info">
+              <div class="acct-name">${esc(me.name)} <span class="${demo ? "demo-badge" : "real-badge"}">${demo ? "Demo" : "Google ✓"}</span></div>
+              <div class="acct-email">${esc(me.email || (demo ? "demo account" : ""))}</div>
+            </div>
+          </div>
+          <button class="btn btn-danger btn-block mt12" onclick="handleSignOut()">${demo ? "Exit demo mode" : "Sign out of Google"}</button>
+        </div>
+      </div>
+
+      <div class="card mt12">
+        <div class="card-head"><h3>Notifications</h3><span class="badge badge-gray" id="notifStateBadge">…</span></div>
+        <div class="card-pad" id="notifBody"></div>
+      </div>
+
+      <div class="card mt12">
+        <div class="card-head"><h3>Legal &amp; help</h3></div>
+        <div class="card-pad">
+          <div class="row">
+            <a class="btn btn-sm" href="terms.html" target="_blank" rel="noopener">📄 Terms &amp; Conditions</a>
+            <a class="btn btn-sm" href="privacy.html" target="_blank" rel="noopener">🔒 Privacy Policy</a>
+            <button class="btn btn-sm btn-primary" onclick="openSetupModal()">🔧 Setup guide &amp; connection check</button>
+          </div>
+          <div class="small muted mt8">The setup guide tests this phone's link to Supabase and tells you exactly what is missing.</div>
+        </div>
+      </div>
+
+      <div class="card mt12" style="border-color:#fecaca">
+        <div class="card-head"><h3 style="color:#991b1b">Delete my account</h3></div>
+        <div class="card-pad">
+          <div class="small">Permanently removes your account, your books and your messages. Nothing can be undone.</div>
+          <div class="row mt8">
+            <button class="btn btn-sm" onclick="downloadMyBooks()">⬇ Download my books first</button>
+            <button class="btn btn-sm" style="color:#dc2626;border-color:#fecaca" onclick="openDeleteModal()">Delete my account…</button>
+          </div>
+        </div>
+      </div>
+
+      ${demo ? `
+      <div class="card mt12">
+        <div class="demo-switch" id="demoSwitch">
+          <label for="demoUserSelect">Demo — switch account to test sharing</label>
+          <select id="demoUserSelect" class="demo-select" aria-label="Demo user"></select>
+          <div class="help-text">Try the story: create as <b>Goldfish</b>, share, then switch to <b>Silverfish</b> — Silverfish can read &amp; search but cannot edit.</div>
+          <div class="row mt8">
+            <button class="btn btn-sm btn-ghost" onclick="confirmDemoReset()">↺ Reset demo data</button>
+            <button class="btn btn-sm" onclick="simulateIncomingCall('audio')">📞 Preview incoming call screen</button>
+          </div>
+        </div>
+      </div>` : ""}`;
+    wireSettings();
+  }
+
+  function wireSettings() {
+    const sel = $("#demoUserSelect");
+    if (sel && S.isDemo()) {
+      sel.innerHTML = S.demoUsers().map(u => `<option value="${u.id}">${esc(u.name)} — ${esc(u.email)}</option>`).join("");
+      sel.value = S.me.id;
+      sel.onchange = e => enterDemo(e.target.value);
+    }
+    renderNotificationSettings();
+  }
+
+  function renderNotificationSettings() {
+    const box = $("#notifBody");
+    if (!box) return;
+    const P = window.RBPush;
+    const st = P ? P.statusText() : { state: "unsupported", title: "Notifications are not available", body: "This browser cannot receive web push.", canEnable: false };
+    const badge = $("#notifStateBadge");
+    if (badge) {
+      badge.textContent = st.state === "granted" ? "ON" : st.state === "denied" ? "BLOCKED" : "OFF";
+      badge.className = "badge " + (st.state === "granted" ? "badge-green" : st.state === "denied" ? "badge-red" : "badge-gray");
+    }
+    box.innerHTML = `
+      <div class="notif-state ${esc(st.state)}">
+        <div class="strong">${esc(st.title)}</div>
+        <div class="small muted mt8">${esc(st.body)}</div>
+        ${st.howTo ? `<div class="small mt8 how-to"><b>How:</b> ${esc(st.howTo)}</div>` : ""}
+      </div>
+      <div class="row mt12">
+        ${st.canEnable ? `<button class="btn btn-primary" onclick="switchNotifications(true)">Switch notifications ON</button>` : ""}
+        ${st.state === "granted" ? `<button class="btn" onclick="switchNotifications(false)">Switch notifications OFF</button>` : ""}
+        <button class="btn" onclick="sendTestNotification()">Send test notification</button>
+      </div>
+      <div id="notifResult" class="small mt8" aria-live="polite"></div>
+      <div class="small muted mt12 limits">
+        <b>Honest limits.</b> Android Chrome delivers push from a normal tab, and better once you
+        “Add to Home Screen”. <b>iPhone Safari only delivers web push after Share → Add to Home Screen</b>
+        (iOS 16.4 or newer); inside a normal Safari tab Apple blocks it, so this screen says so
+        instead of pretending it works.
+      </div>`;
+  }
+
+  async function switchNotifications(on) {
+    const set = t => { const b = $("#notifResult"); if (b) b.textContent = t; };
+    set("Working…");
+    const P = window.RBPush;
+    if (!P) { set("Push is not available in this browser."); return; }
+    const res = on ? await P.enable() : await P.disable();
+    if (!res.ok) {
+      set(res.message || "Could not change notifications.");
+      toast(res.message || "Could not change notifications");
+    } else {
+      set(on ? "Notifications are ON ✓ — press “Send test notification” to prove it." : "Notifications are OFF.");
+    }
+    renderNotificationSettings();
+    renderHeader();
+  }
+
+  async function sendTestNotification() {
+    const set = t => { const b = $("#notifResult"); if (b) b.textContent = t; };
+    set("Sending…");
+    const res = await window.RBPush.sendTest();
+    set(res.message || (res.ok ? "Sent ✓" : "Failed"));
+    if (res.ok) renderAll();
+  }
+
+  // ---------------------------------------------------------------- delete account
+  function downloadMyBooks() {
+    if (!S.exportMyBooks) return;
+    const text = S.exportMyBooks();
+    try {
+      const blob = new Blob([text], { type: "text/plain;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "registerbook-my-books.txt";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 2000);
+      toast("Download started ✓");
+    } catch (e) {
+      const w = window.open("", "_blank");
+      if (w) { w.document.write("<pre>" + esc(text) + "</pre>"); }
+      else toast("Could not download — your browser blocked it");
+    }
+  }
+  function openDeleteModal() {
+    const body = $("#deleteBody"), m = $("#deleteModal");
+    if (!body || !m) return;
+    const sum = S.accountSummary ? S.accountSummary() : {};
+    body.innerHTML = `
+      <div class="danger-note"><b>This cannot be undone.</b> Everything below is deleted for ever:</div>
+      <ul class="delete-list">
+        <li><b>${sum.registers || 0}</b> register book(s) you created</li>
+        <li><b>${sum.lines || 0}</b> lines you wrote inside them</li>
+        <li><b>${sum.shares || 0}</b> share(s) — <b>books you shared will disappear for the other staff too</b></li>
+        <li><b>${sum.groups || 0}</b> group(s) you created and <b>${sum.memberships || 0}</b> group membership(s)</li>
+        <li><b>${sum.messages || 0}</b> private message(s) and <b>${sum.groupMessages || 0}</b> group message(s)</li>
+        <li>your profile (Google name, email and photo) and your friend connections</li>
+      </ul>
+      <div class="row"><button class="btn btn-sm" onclick="downloadMyBooks()">⬇ Download my books first</button></div>
+      <hr class="hr">
+      <div class="form-row">
+        <label for="deleteConfirm">Type <b>DELETE</b> to confirm</label>
+        <input id="deleteConfirm" placeholder="DELETE" autocomplete="off" autocapitalize="characters">
+      </div>
+      <div class="row">
+        <button class="btn btn-danger" onclick="confirmDeleteAccount()">Delete my account</button>
+        <button class="btn" onclick="closeDeleteModal()">Cancel</button>
+      </div>
+      <div id="deleteResult" class="small mt8" aria-live="polite"></div>`;
+    m.classList.add("open");
+  }
+  function closeDeleteModal() { const m = $("#deleteModal"); if (m) m.classList.remove("open"); }
+  async function confirmDeleteAccount() {
+    const inp = $("#deleteConfirm");
+    if (!inp || String(inp.value).trim().toUpperCase() !== "DELETE") { toast('Please type DELETE to confirm'); return; }
+    const set = t => { const b = $("#deleteResult"); if (b) b.textContent = t; };
+    set("Working…");
+    if (S.isDemo()) {
+      await S.requestAccountDeletion("demo mode");
+      set("Demo mode: deletion is recorded as a request only. Real deletion needs a signed-in Google account and the rb-delete-account Edge Function.");
+      return;
+    }
+    const res = await S.deleteAccountNow();
+    if (!res.ok) {
+      try { await S.requestAccountDeletion("edge function unavailable: " + (res.reason || "")); } catch (e) {}
+      set("Real deletion needs admin rights that the browser must never hold. Your request has been RECORDED and is awaiting processing — your data is NOT deleted yet. Reason: " + (res.reason || "unknown"));
+      return;
+    }
+    set("Account deleted ✓ Signing out…");
+    toast("Your account and data were deleted");
+    setTimeout(async () => {
+      try { await window.RBAuth.signOut(); } catch (e) {}
+      closeDeleteModal();
+      showGate();
+      defaultGateHint();
+    }, 1400);
   }
 
   // ---------------------------------------------------------------- create register
@@ -1396,35 +1770,278 @@
     }
   }
 
-  // ---------------------------------------------------------------- demo call (clearly labelled)
+  // ---------------------------------------------------------------- group invites
+  function openInviteModal(groupId) {
+    const m = $("#inviteModal");
+    if (!m) return;
+    const g = S.data.groups.find(x => x.id === groupId);
+    state.invite = { groupId, userId: null, code: "" };
+    $("#inviteGroupId").value = groupId;
+    $("#inviteGroupName").textContent = g ? g.name : "this group";
+    $("#inviteUserInput").value = "";
+    $("#inviteSelected").innerHTML = `<span class="small muted">No one picked yet — search above, or copy an invite link below.</span>`;
+    $("#inviteSuggest").classList.remove("open");
+    $("#inviteLinkBox").hidden = true;
+    m.classList.add("open");
+    renderInviteExisting();
+  }
+  function closeInviteModal() { const m = $("#inviteModal"); if (m) m.classList.remove("open"); }
+
+  function handleInviteUserInput(q) {
+    const box = $("#inviteSuggest");
+    if (!box) return;
+    const members = S.groupMembers(state.invite.groupId);
+    const list = S.searchPeople(q).filter(p => members.indexOf(p.id) < 0);
+    if (!String(q || "").trim() || !list.length) { box.classList.remove("open"); box.innerHTML = ""; return; }
+    box.innerHTML = list.slice(0, 8).map(p =>
+      `<div onclick="pickInviteUser('${p.id}')">${avatar(p, "sm")}<span>${esc(p.name)}</span><span class="sug-meta">${esc(p.email || "")}</span></div>`
+    ).join("");
+    box.classList.add("open");
+  }
+  function pickInviteUser(userId) {
+    state.invite.userId = userId;
+    const p = S.profile(userId);
+    const sel = $("#inviteSelected");
+    if (sel) sel.innerHTML = `<span class="chip">${avatar(p, "sm")}${esc(p.name)}</span> <button class="btn btn-sm btn-ghost" onclick="clearInvitePick()">✕</button>`;
+    const box = $("#inviteSuggest"); if (box) box.classList.remove("open");
+    const inp = $("#inviteUserInput"); if (inp) inp.value = p.name;
+  }
+  function clearInvitePick() {
+    state.invite.userId = null;
+    const sel = $("#inviteSelected");
+    if (sel) sel.innerHTML = `<span class="small muted">No one picked yet.</span>`;
+    const inp = $("#inviteUserInput"); if (inp) inp.value = "";
+  }
+  async function sendInvite() {
+    if (state.busy) return;
+    if (!state.invite.userId) { toast("Search for a person first, then press Send invite"); return; }
+    state.busy = true;
+    try {
+      const inv = await S.invitePersonToGroup(state.invite.groupId, state.invite.userId);
+      const p = S.profile(state.invite.userId);
+      toast(`Invite sent to ${p.name} ✓ — they will see it in their notifications`);
+      clearInvitePick();
+      renderInviteExisting();
+      await S.refresh().catch(() => {});
+      renderAll();
+    } catch (e) {
+      toast(e.message || "Could not send the invite");
+    } finally { state.busy = false; }
+  }
+  async function makeInviteLink() {
+    if (state.busy) return;
+    state.busy = true;
+    try {
+      const inv = await S.createGroupInviteLink(state.invite.groupId);
+      const url = window.RBNotifyText
+        ? window.RBNotifyText.joinUrl((window.RB_CONFIG && window.RB_CONFIG.SITE_URL) || (location.origin + location.pathname), inv.code)
+        : (location.origin + location.pathname + "#join=" + inv.code);
+      state.invite.code = inv.code;
+      const box = $("#inviteLinkBox"), val = $("#inviteLinkValue");
+      if (val) val.textContent = url;
+      if (box) box.hidden = false;
+      copyText(url, "Invite link");
+      renderInviteExisting();
+    } catch (e) {
+      toast(e.message || "Could not create the invite link");
+    } finally { state.busy = false; }
+  }
+  function copyInviteLink() {
+    const val = $("#inviteLinkValue");
+    if (val) copyText(val.textContent, "Invite link");
+  }
+  function renderInviteExisting() {
+    const c = $("#inviteExisting");
+    if (!c) return;
+    const list = S.invitesForGroup ? S.invitesForGroup(state.invite.groupId) : [];
+    if (!list.length) { c.innerHTML = `<span class="muted">No invites sent yet.</span>`; return; }
+    c.innerHTML = `<div class="small"><b>Invites:</b></div>` + list.map(i => {
+      const who = i.invitedUserId ? profileOf(i.invitedUserId).name : "anyone with the link";
+      return `<div class="small" style="padding:4px 0;border-bottom:1px solid #f3f4f6">
+        ${esc(who)} — <span class="badge ${i.status === "pending" ? "badge-amber" : i.status === "accepted" ? "badge-green" : "badge-gray"}">${esc(i.status)}</span>
+        <code>${esc(i.code)}</code>
+      </div>`;
+    }).join("");
+  }
+
+  // ---------------------------------------------------------------- join by link
+  function closeJoinModal() { const m = $("#joinModal"); if (m) m.classList.remove("open"); }
+  async function showJoinInvite(code) {
+    const m = $("#joinModal"), b = $("#joinBody");
+    if (!m || !b) return;
+    const clean = String(code || "").trim().toUpperCase();
+    b.innerHTML = `<div class="small muted">Loading the invite…</div>`;
+    m.classList.add("open");
+    let info = null;
+    try {
+      if (S.previewInvite) info = await S.previewInvite(clean);
+    } catch (e) { /* fall through */ }
+    if (!info) {
+      b.innerHTML = `<div class="empty">
+        <div class="big">Invite not found</div>
+        <div class="small">The code <code>${esc(clean)}</code> is not valid, or it has already been used.
+        Ask the person who invited you for a fresh link.</div>
+        <div class="mt8"><button class="btn" onclick="closeJoinModal()">Close</button></div>
+      </div>`;
+      return;
+    }
+    b.innerHTML = `
+      <div class="join-card">
+        <div style="font-size:40px;text-align:center" aria-hidden="true">👥</div>
+        <div class="section-title" style="text-align:center;margin-top:6px">You're invited to ${esc(info.groupName || "a group")}</div>
+        <div class="small muted" style="text-align:center">${esc(info.fromName || "A colleague")} invited you · ${info.memberCount || 0} member(s)</div>
+        ${String(info.status) !== "pending" ? `<div class="badge badge-gray mt8" style="display:block;text-align:center">This invite was already ${esc(info.status)}</div>` : ""}
+        <div class="small muted mt12">Joining lets you read every register shared with this group (view-only — only the creator can edit).</div>
+      </div>
+      <div class="row mt12">
+        <button class="btn btn-primary btn-block" onclick="joinGroup('${esc(info.code)}')">Join group</button>
+        <button class="btn btn-block" onclick="declineGroupInvite('${esc(info.code)}')">Decline</button>
+      </div>`;
+  }
+
+  // ---------------------------------------------------------------- real calls (WebRTC)
   let callTimer = null, callSec = 0;
-  function startCall(userId) {
-    const p = profileOf(userId);
+
+  function openCallScreen(o) {
     const overlay = $("#callOverlay");
     if (!overlay) return;
-    $("#callAvatar").innerHTML = avatar(p);
-    $("#callName").textContent = p.name;
-    $("#callStatus").textContent = "Calling…";
+    state.call = { name: o.name || "—", kind: o.kind || "audio", direction: o.direction || "out", peerId: o.peerId || null };
+    const av = $("#callAvatar"); if (av) av.innerHTML = o.avatarHtml || "";
+    const nm = $("#callName"); if (nm) nm.textContent = o.name || "—";
+    const st = $("#callStatus"); if (st) st.textContent = o.direction === "in" ? "Incoming call…" : "Calling…";
+    showCallError("");
     overlay.style.display = "flex";
-    callSec = 0;
-    clearInterval(callTimer);
-    callTimer = setInterval(() => {
-      callSec++;
-      const m = String(Math.floor(callSec / 60)).padStart(2, "0");
-      const s = String(callSec % 60).padStart(2, "0");
-      const el = $("#callStatus");
-      if (el) el.textContent = `${m}:${s} — demo screen (no audio)`;
-    }, 1000);
-    setTimeout(() => {
-      const el = $("#callStatus");
-      if (el && callSec < 2) el.textContent = "Ringing… (demo — no audio)";
-    }, 1200);
+    updateCallScreen(o.direction === "in" ? "incoming" : "outgoing");
   }
-  function endCall() {
-    clearInterval(callTimer);
+
+  function updateCallScreen(phase) {
     const overlay = $("#callOverlay");
-    if (overlay) overlay.style.display = "none";
-    toast("Call ended — this was a demo screen. Real WebRTC calling is the next step.");
+    if (!overlay || overlay.style.display === "none") return;
+    const st = $("#callStatus"), acts = $("#callActions");
+    const kind = (state.call && state.call.kind) || "audio";
+    const vid = $("#remoteVideo"), self = $("#localVideo");
+    if (self) self.style.display = (kind === "video" && (phase === "connecting" || phase === "connected")) ? "block" : "none";
+    if (vid) vid.style.display = (kind === "video" && phase === "connected") ? "block" : "none";
+    clearInterval(callTimer);
+
+    if (phase === "outgoing") {
+      if (st) st.textContent = "Ringing… waiting for them to answer";
+      if (acts) acts.innerHTML = `<button class="btn-call btn-end" onclick="endCall()" aria-label="Cancel the call">📞</button>`;
+    } else if (phase === "incoming") {
+      if (st) st.textContent = "Incoming " + kind + " call";
+      if (acts) acts.innerHTML = `
+        <button class="btn-call btn-accept" onclick="answerCurrentCall()" aria-label="Answer the call">📞</button>
+        <button class="btn-call btn-end" onclick="endCall()" aria-label="Decline the call">✕</button>`;
+    } else if (phase === "connecting") {
+      if (st) st.textContent = "Connecting…";
+      if (acts) acts.innerHTML = callControlButtons();
+    } else if (phase === "connected") {
+      callSec = 0;
+      if (st) st.textContent = "Connected — 00:00";
+      callTimer = setInterval(() => {
+        callSec++;
+        const m = String(Math.floor(callSec / 60)).padStart(2, "0");
+        const sec = String(callSec % 60).padStart(2, "0");
+        if (st) st.textContent = "Connected — " + m + ":" + sec;
+      }, 1000);
+      if (acts) acts.innerHTML = callControlButtons();
+    } else if (phase === "ended") {
+      if (st) st.textContent = "Call ended";
+      if (acts) acts.innerHTML = `<button class="btn-call btn-end" onclick="hideCallScreen()" aria-label="Close the call screen">✕</button>`;
+    }
+  }
+
+  function callControlButtons() {
+    const R = window.RBRtc || {};
+    const kind = (state.call && state.call.kind) || "audio";
+    return `<button class="btn-call btn-mic ${R.muted ? "off" : ""}" onclick="toggleCallMute()" aria-label="${R.muted ? "Unmute microphone" : "Mute microphone"}">${R.muted ? "🔇" : "🎙️"}</button>
+      ${kind === "video" ? `<button class="btn-call btn-mic ${R.cameraOff ? "off" : ""}" onclick="toggleCallCamera()" aria-label="${R.cameraOff ? "Turn camera on" : "Turn camera off"}">${R.cameraOff ? "🚫" : "🎥"}</button>` : ""}
+      <button class="btn-call btn-end" onclick="endCall()" aria-label="End the call">📞</button>`;
+  }
+
+  function showCallError(msg) {
+    const el = $("#callError");
+    if (el) el.innerHTML = msg ? esc(msg) : "";
+  }
+  function hideCallScreen() {
+    clearInterval(callTimer);
+    const o = $("#callOverlay");
+    if (o) o.style.display = "none";
+    const v = $("#remoteVideo"), l = $("#localVideo");
+    if (v) { try { v.pause(); } catch (e) {} v.srcObject = null; }
+    if (l) { try { l.pause(); } catch (e) {} l.srcObject = null; }
+    showCallError("");
+    state.call = null;
+  }
+
+  async function startCall(userId, kind) {
+    const p = profileOf(userId);
+    openCallScreen({ name: p.name, avatarHtml: avatar(p), kind: kind || "audio", direction: "out", peerId: userId });
+    try {
+      await window.RBRtc.call(userId, kind || "audio");
+    } catch (e) {
+      showCallError(e.message || "Could not start the call");
+      updateCallScreen("ended");
+    }
+  }
+  function answerCurrentCall() {
+    const id = window.RBRtc.callId;
+    if (!id) { showCallError("That call is no longer available."); return; }
+    window.RBRtc.answer(id).catch(e => showCallError(e.message || "Could not answer the call"));
+  }
+  async function endCall() {
+    clearInterval(callTimer);
+    const R = window.RBRtc;
+    if (!R) { hideCallScreen(); return; }
+    if (R.phase === "incoming") { try { await R.decline(); } catch (e) {} }
+    else { try { await R.hangup(); } catch (e) {} }
+    hideCallScreen();
+  }
+  function toggleCallMute() {
+    const m = window.RBRtc.toggleMute();
+    toast(m ? "Microphone muted" : "Microphone on");
+    updateCallScreen(window.RBRtc.phase);
+  }
+  function toggleCallCamera() {
+    const off = window.RBRtc.toggleCamera();
+    toast(off ? "Camera off" : "Camera on");
+    updateCallScreen(window.RBRtc.phase);
+  }
+  function simulateIncomingCall(kind) {
+    const R = window.RBRtc;
+    if (!R) return;
+    R.simulateIncoming(kind);
+    const other = S.otherProfiles()[0] || profileOf("goldfish");
+    openCallScreen({ name: other.name, avatarHtml: avatar(other), kind, direction: "in" });
+  }
+  // called when a ringing call row arrives while the app is open
+  function incomingCallFromRow(call) {
+    if (!call || !window.RBRtc) return;
+    if (!window.RBRtc.incomingCall(call)) return;
+    const p = profileOf(call.callerId);
+    openCallScreen({ name: p.name, avatarHtml: avatar(p), kind: call.kind || "audio", direction: "in" });
+    if (window.RBPush) window.RBPush.ting();
+  }
+
+  // ---------------------------------------------------------------- writing date (optional)
+  function toggleLineDate() {
+    const w = $("#lineDateWrap"), t = $("#lineDateToggle");
+    if (!w) return;
+    const open = w.hasAttribute("hidden");
+    if (open) w.removeAttribute("hidden"); else w.setAttribute("hidden", "");
+    if (t) {
+      t.setAttribute("aria-expanded", open ? "true" : "false");
+      t.textContent = open ? "Hide the date box" : "Use a different date?";
+    }
+    if (open) { const d = $("#newLineDate"); if (d) d.focus(); }
+  }
+  function useTodayForLine() {
+    const d = $("#newLineDate");
+    if (d) d.value = todayIso();
+    const w = $("#lineDateWrap"); if (w) w.setAttribute("hidden", "");
+    const t = $("#lineDateToggle");
+    if (t) { t.setAttribute("aria-expanded", "false"); t.textContent = "Use a different date?"; }
+    toast("Back to today's date ✓");
   }
 
   // ---------------------------------------------------------------- owner setup guide
@@ -1598,6 +2215,8 @@
   }
   async function handleSignOut() {
     clearInterval(state.timer);
+    stopRealtime();
+    if (window.RBRtc) window.RBRtc.reset();
     await window.RBAuth.signOut();
     state.chatWith = null;
     state.groupId = null;
@@ -1626,8 +2245,153 @@
       const r = await S.shareWithUser(reg.id, "silverfish");
       toast(r.already ? "Already shared with Silverfish — switch to Silverfish to check view-only" : "Shared Goldfish's checklist with Silverfish ✓");
       enterDemo("silverfish");
-      setTimeout(() => setView("shared"), 120);
+      setTimeout(() => setView("library"), 120);
     } catch (e) { toast(e.message); }
+  }
+
+  // ---------------------------------------------------------------- realtime (app is open)
+  let rtChannels = [];
+  function stopRealtime() {
+    const c = window.RBAuth && window.RBAuth.getClient ? window.RBAuth.getClient() : null;
+    if (!c) return;
+    rtChannels.forEach(ch => { try { c.removeChannel(ch); } catch (e) {} });
+    rtChannels = [];
+  }
+  function startRealtime() {
+    const c = window.RBAuth && window.RBAuth.getClient ? window.RBAuth.getClient() : null;
+    if (!c || !c.channel || S.isDemo() || !S.me) return;
+    stopRealtime();
+    const meId = S.me.id;
+    const add = (name, table, filter, handler) => {
+      try {
+        const opts = { event: "INSERT", schema: "public", table: table };
+        if (filter) opts.filter = filter;
+        rtChannels.push(c.channel(name).on("postgres_changes", opts, handler).subscribe());
+      } catch (e) { console.warn("[realtime] " + name, e); }
+    };
+
+    // 1. the inbox row itself (written by the rb-notify Edge Function)
+    add("rb-rt-notes", "rb_notifications", "user_id=eq." + meId, p => {
+      const row = p.new || {};
+      S.data.notifications.unshift({
+        id: row.id, userId: row.user_id, type: row.type, title: row.title,
+        body: row.body || "", data: row.data || {}, read: false, createdAt: row.created_at
+      });
+      if (window.RBPush) window.RBPush.showInApp(S.data.notifications[0]);
+      renderAll();
+    });
+
+    // 2. instant banner even if the push round-trip is slow
+    add("rb-rt-dm", "rb_direct_messages", "receiver_id=eq." + meId, p => {
+      const row = p.new || {};
+      S.refresh().then(() => renderAll()).catch(() => {});
+      if (window.RBPush) window.RBPush.showInApp({
+        id: "live_" + row.id, type: "message",
+        title: profileOf(row.sender_id).name + ": you have a new message",
+        body: row.text || "", data: { senderId: row.sender_id }
+      });
+    });
+    add("rb-rt-fr", "rb_friend_requests", "to_user=eq." + meId, p => {
+      const row = p.new || {};
+      S.refresh().then(() => renderAll()).catch(() => {});
+      if (window.RBPush) window.RBPush.showInApp({
+        id: "live_" + row.id, type: "friend",
+        title: profileOf(row.from_user).name + " sent you a friend request",
+        body: "Tap Accept to connect.", data: { requestId: row.id, senderId: row.from_user }
+      });
+    });
+    add("rb-rt-inv", "rb_group_invites", null, p => {
+      S.refresh().then(() => renderAll()).catch(() => {});
+      if (window.RBPush) window.RBPush.showInApp({
+        id: "live_" + (p.new ? p.new.id : Date.now()), type: "invite",
+        title: "You're invited to a group",
+        body: "Open the app to join or decline.", data: { code: p.new ? p.new.code : "" }
+      });
+    });
+    // 3. incoming calls — ring while the app is open
+    add("rb-rt-calls", "rb_calls", "callee_id=eq." + meId, p => {
+      const row = p.new || {};
+      if (String(row.status) !== "ringing") return;
+      S.refresh().then(() => renderAll()).catch(() => {});
+      incomingCallFromRow({
+        id: row.id, callerId: row.caller_id, calleeId: row.callee_id,
+        kind: row.kind, status: row.status, createdAt: row.created_at
+      });
+    });
+  }
+  function checkRingingCalls() {
+    if (S.isDemo() || !window.RBRtc || !S.me) return;
+    const now = Date.now();
+    const call = S.data.calls.find(c =>
+      c.calleeId === S.me.id && String(c.status) === "ringing" &&
+      (now - new Date(c.createdAt).getTime()) < 90000);
+    if (call) incomingCallFromRow(call);
+  }
+
+  // ---------------------------------------------------------------- deep links
+  // The service worker opens the app at  #join=CODE  /  #call=ID  /  #chat=ID
+  // and adds &rbaction=accept|decline|join|answer when a button was pressed.
+  function handleDeepLinks() {
+    const h = String(location.hash || "").replace(/^#/, "");
+    if (!h) return;
+    let params = null;
+    try { params = new URLSearchParams(h); } catch (e) { return; }
+
+    if (params.has("join")) {
+      const code = String(params.get("join") || "").toUpperCase();
+      setTimeout(() => showJoinInvite(code).catch(() => {}), 350);
+    } else if (params.has("chat")) {
+      const uid = params.get("chat") || "";
+      setTimeout(() => { setView("community"); if (uid) openChat(uid); }, 300);
+    } else if (params.has("call")) {
+      setTimeout(() => setView("community"), 200);
+    } else if (params.has("requests")) {
+      setTimeout(() => setView("community"), 200);
+    } else if (params.has("inbox")) {
+      setTimeout(() => openInbox(), 200);
+    } else if (params.has("new")) {
+      setTimeout(() => openCreateModal(), 300);
+    }
+
+    const action = params.get("rbaction") || "";
+    if (action && action !== "open" && action !== "reply_later") {
+      const data = {
+        type: params.get("rbtype") || "",
+        requestId: params.get("rbreq") || "",
+        code: params.get("join") || "",
+        callId: params.get("call") || ""
+      };
+      setTimeout(() => runNotificationAction(action, data), 900);
+    }
+    try { history.replaceState(null, "", location.pathname + location.search); } catch (e) {}
+  }
+  async function runNotificationAction(action, data) {
+    data = data || {};
+    if (!S.me) return;
+    try {
+      if (action === "accept") await actFriend(data.requestId, "accepted");
+      else if (action === "join") await joinGroup(data.code);
+      else if (action === "answer") await answerCall(data.callId);
+      else if (action === "decline") {
+        if (data.type === "invite") await declineGroupInvite(data.code);
+        else if (data.type === "call") await declineCall(data.callId);
+        else await actFriend(data.requestId, "declined");
+      } else setView("community");
+    } catch (e) { /* never crash on a notification action */ }
+    renderAll();
+  }
+  function setupSwMessages() {
+    if (!("serviceWorker" in navigator)) return;
+    navigator.serviceWorker.addEventListener("message", ev => {
+      const d = ev && ev.data;
+      if (d && d.type === "rb-notification-action") runNotificationAction(d.action, d.data);
+    });
+  }
+  function registerServiceWorker() {
+    if (!("serviceWorker" in navigator)) return;
+    navigator.serviceWorker.register("sw.js", { scope: "./" })
+      .then(() => setupSwMessages())
+      .catch(() => {});
   }
 
   // ---------------------------------------------------------------- refresh / boot
@@ -1644,7 +2408,7 @@
     if (document.querySelector(".modal.open")) return;
     const a = document.activeElement;
     if (a && ["INPUT", "TEXTAREA", "SELECT"].includes(a.tagName)) return;
-    S.refresh().then(() => renderAll()).catch(() => {});
+    S.refresh().then(() => { renderAll(); checkRingingCalls(); }).catch(() => {});
   }
   function startAutoRefresh() {
     clearInterval(state.timer);
@@ -1654,8 +2418,20 @@
 
   async function boot() {
     fillGateChips();
+    registerServiceWorker();
     const today = $("#todayPreview");
     if (today) today.textContent = fmtFull(new Date());
+
+    if (window.RBRtc) {
+      window.RBRtc.init({
+        phase: ph => updateCallScreen(ph),
+        localstream: st => { const el = $("#localVideo"); if (el) el.srcObject = st || null; },
+        remotestream: st => { const el = $("#remoteVideo"); if (el) el.srcObject = st || null; },
+        error: msg => showCallError(msg),
+        localstatus: t => { const el = $("#callStatus"); if (el && window.RBRtc.phase === "outgoing") el.textContent = t; },
+        demo: () => {}
+      });
+    }
 
     if (window.RBAuth) {
       window.RBAuth.onChange(async (event, session) => {
@@ -1694,6 +2470,7 @@
       renderAll();
       setView("home");
       startAutoRefresh();
+      handleDeepLinks();
       return;
     }
     showGate();
@@ -1714,6 +2491,9 @@
     renderAll();
     setView("home");
     startAutoRefresh();
+    startRealtime();
+    checkRingingCalls();
+    handleDeepLinks();
     return true;
   }
 
@@ -1721,18 +2501,29 @@
   Object.assign(window, {
     setView, openCreateModal, closeCreateModal, createRegister,
     openRegister, changePage, gotoPageInput, addLine, toggleDone, editEntry, deleteEntry, deleteRegister,
-    handleInsideSearch, jumpToSuggestion,
+    handleInsideSearch, jumpToSuggestion, backToLibrary,
     openShareModal, closeShareModal, handleShareUserInput, pickShareUser, clearSharePick, doShare, removeShareConfirm,
     openShareModalForUser, openShareToGroupModal,
     handlePeopleSearch, selectPerson, askFriend: askFriend, sendFriendRequest: askFriend, respondFriend,
     openGroupModal, closeGroupModal, createGroup, openGroup, closeGroup, sendGroupMsg,
     openAddMemberModal, closeAddMemberModal, handleAddMemberSearch, toggleAddMember,
-    openChat, sendChat, stateChatBack, startCall, endCall,
+    openChat, sendChat, stateChatBack,
+    startCall, endCall, hideCallScreen, answerCurrentCall, toggleCallMute, toggleCallCamera, simulateIncomingCall,
+    openInbox, renderInbox, markAllNotificationsRead, openNotification, actFriend,
+    openInviteModal, closeInviteModal, handleInviteUserInput, pickInviteUser, clearInvitePick,
+    sendInvite, makeInviteLink, copyInviteLink, showJoinInvite, closeJoinModal, joinGroup, declineGroupInvite,
+    answerCall, declineCall,
+    openDeleteModal, closeDeleteModal, downloadMyBooks, confirmDeleteAccount,
+    switchNotifications, sendTestNotification, renderNotificationSettings,
+    toggleLineDate, useTodayForLine,
     handleGoogleLogin, handleSignOut, enterDemo, demoStory,
     handleFriend: respondFriend,
     toast, toggleSidebar, manualRefresh,
     openSetupModal, closeSetupModal, copyText, runDiagnostics
   });
+
+  // used by push.js to make the in-app banner open the right notification
+  window.RBApp = { openNotification, openInbox };
 
   // small aliases used by inline handlers in older docs
   window.confirmDemoReset = function () {
@@ -1749,7 +2540,7 @@
   });
   document.addEventListener("keydown", e => {
     if (e.key === "Escape") {
-      ["createModal", "shareModal", "groupModal", "addMemberModal"].forEach(id => {
+      ["createModal", "shareModal", "groupModal", "addMemberModal", "inviteModal", "joinModal", "deleteModal"].forEach(id => {
         const el = document.getElementById(id);
         if (el) el.classList.remove("open");
       });
