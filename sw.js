@@ -8,7 +8,7 @@
  * Network-first for same-origin files, so you always get the newest code when
  * you are online and the cached copy when you are not.
  */
-const VERSION = "rb-2026-10-23b";
+const VERSION = "rb-2026-10-23c";
 const CACHE = "registerbook-" + VERSION;
 
 const SHELL = [
@@ -74,7 +74,25 @@ self.addEventListener("fetch", event => {
     return;
   }
 
-  // Everything else on our own origin: cache first, refresh in the background.
+  // Code (js/css/json) must always be fresh - otherwise a phone keeps running
+  // last week's app after we deploy. Network first, cache only when offline.
+  const isCode = /\.(js|css|json|webmanifest)$/i.test(url.pathname) || url.pathname === "/sw.js";
+  if (isCode) {
+    event.respondWith(
+      fetch(req)
+        .then(res => {
+          if (res && res.ok) {
+            const copy = res.clone();
+            caches.open(CACHE).then(c => c.put(req, copy)).catch(() => {});
+          }
+          return res;
+        })
+        .catch(() => caches.match(req).then(r => r || Response.error()))
+    );
+    return;
+  }
+
+  // Images and everything else on our own origin: cache first, refresh later.
   event.respondWith(
     caches.match(req).then(cached => {
       const network = fetch(req)
