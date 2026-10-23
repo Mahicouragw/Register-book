@@ -79,21 +79,25 @@ tests/                       automated tests
 |---|---|
 | Four-tab app, writing fix, Terms, Privacy, Delete account | ✅ built on this branch |
 | Group invites by name and by link | ✅ built |
-| Push notifications (PWA + VAPID + Edge Function) | ✅ code built — ⏳ must be deployed to Supabase |
-| Real WebRTC audio + video calling | ✅ code built — ⏳ push/call delivery must be tested on two phones |
-| `supabase/migrations.sql` extended to 15 tables | ✅ runs clean on PostgreSQL (proven by tests) |
-| The new migration applied to the **live** project | ⏳ blocked — see below |
-| The two Edge Functions deployed | ⏳ blocked — see below |
+| Push notifications (PWA + VAPID + Edge Function) | ✅ built and **deployed** — ⏳ delivery must be tested on a phone |
+| Real WebRTC audio + video calling | ✅ built — ⏳ must be tested on two phones |
+| `supabase/migrations.sql` extended to 15 tables | ✅ runs clean on PostgreSQL |
+| The new migration applied to the **live** project | ✅ **done** — 15 tables, all with RLS on |
+| RLS proven against the **live** database | ✅ **33 / 33 checks pass**, inside a discarded transaction |
+| VAPID secrets set in Supabase | ✅ **done** |
+| The two Edge Functions deployed | ✅ **done** — both `ACTIVE` |
 | GitHub Pages | ✅ `status: built`, branch `main`, folder `/` |
 
-> ### ⚠️ The Supabase connection is on the wrong account
-> The Arena → Supabase connection currently only sees an organisation called
-> **“Mahicouragw/Black-sold-ultimate”**, which is a *different* account. The
-> **RegisterBook** organisation (`aacfyjatpkmupufsaraq`, project ref
-> `tmkpdvljhnlnvbckbnsc`) is not visible there, so **nothing database-side has been
-> applied yet**. Please reconnect the Supabase account that owns RegisterBook, then
-> the remaining steps (migration, live RLS proof, VAPID secret, Edge Function
-> deployment) can go ahead. No new project should be created.
+**The only thing left is testing on real phones.** Push delivery and call
+connection cannot be proven from a computer — see `TEST_REPORT.md` for the
+two-account test script.
+
+### What was applied to the live project
+
+Three migrations: `rb_part2a_new_tables_notifications_invites_calls`,
+`rb_part2b_group_invite_policies_and_helpers`, `rb_part2c_policies_grants_realtime`.
+They are safe to re-run. The full script `supabase/migrations.sql` stays the
+single source of truth and is safe to run on a fresh project.
 
 ---
 

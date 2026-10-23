@@ -26,7 +26,7 @@ window.RB_CONFIG = {
   //   RB_VAPID_PRIVATE_KEY
   // inside the rb-notify Edge Function. It is not in this repo and must never
   // be pasted into Git or into chat.
-  VAPID_PUBLIC_KEY: "BOulBV26fO2TPgsIOQw6uHVhM04OAio62acpiSpi69HuinwNVh6nsyZZzspPRAcureEdj1wVTsnyNbfpdarI5Sk",
+  VAPID_PUBLIC_KEY: "BAHRWF_YRQ3C1JM5BuF3xgK_wsVjckEIaIBAVvbVVf4buvT64ESvwQDtlk88yQ70JB6-UzKtfE8V5PPJcr3UQAc",
 
   // Web Push needs a mailto/https contact address for the VAPID claim.
   VAPID_SUBJECT: "mailto:numbersareplaying@gmail.com",

@@ -67,24 +67,101 @@ The tests prove it is not a guess:
 
 ---
 
-## 2. What has *not* been verified — please read
+## 2. ✅ What has now been done on the live project
 
-| Not verified | Why | What is needed |
+The owner reconnected the Supabase account, so everything below was run against the
+**real** RegisterBook project (`tmkpdvljhnlnvbckbnsc`, Mumbai).
+
+### 2a. Migration applied — 3 atomic migrations
+
+| Migration | What it created |
+|---|---|
+| `rb_part2a_new_tables_notifications_invites_calls` | the 6 new tables + RLS enabled + `rb_is_call_participant()` |
+| `rb_part2b_group_invite_policies_and_helpers` | invite policies + `rb_accept_group_invite`, `rb_decline_group_invite`, `rb_invite_preview` |
+| `rb_part2c_policies_grants_realtime` | policies, grants, revoked anon access, Realtime publication |
+
+Verified afterwards:
+
+- **15 `rb_*` tables, every one with `rowsecurity = true`.**
+- **50 policies**, and `rb_notifications` has **no INSERT policy** — only the Edge Function can write a notification.
+- **7 tables published to `supabase_realtime`**: `rb_direct_messages`, `rb_notifications`, `rb_friend_requests`, `rb_group_invites`, `rb_calls`, `rb_call_signals`, `rb_group_messages`.
+
+### 2b. RLS proven on the live database — 33 / 33 PASS
+
+Three temporary users were created **inside one database transaction that was then
+discarded**, so nothing was written. A re-count immediately afterwards showed every
+table still empty — the proof left no trace.
+
+| # | As | Action | Result |
+|---:|---|---|---|
+| 1–3 | owner | create a register, write a line, see it | ✅ all work |
+| 4–7 | owner | create a group, join it, share the register, create an invite | ✅ all work |
+| 8 | owner | save own push subscription | ✅ works |
+| 9 | owner | **forge** an `rb_notifications` row | ✅ **BLOCKED (42501)** |
+| 10–11 | owner | place a call, send a call signal | ✅ work |
+| 12–13 | reader | see the shared register and read its lines | ✅ works |
+| 14 | reader | **INSERT** a line | ✅ **BLOCKED (42501)** |
+| 15–16 | reader | **UPDATE** / **DELETE** a line | ✅ **0 rows** |
+| 17 | reader | **forge** a notification | ✅ **BLOCKED (42501)** |
+| 18–19 | reader | see only the invite addressed to them; cannot see the owner's push subscription | ✅ |
+| 20–23 | reader | accept the invite (becomes a member: 2 members), second accept refused, answer the call | ✅ |
+| 24–32 | outsider | see register / lines / call / invite / push subs / notifications / shares | ✅ **all 0 rows** |
+| 26, 28 | outsider | **INSERT** a line, send a call signal | ✅ **BLOCKED (42501)** |
+| 33 | link only | preview an invite by code without being signed in to it | ✅ works |
+
+> Note on PostgreSQL semantics: a blocked **INSERT** raises error `42501`, while a
+> blocked **UPDATE** or **DELETE** silently affects **0 rows**. Both mean the same
+> thing — the write did not happen.
+
+### 2c. VAPID keys and secrets
+
+The private key file was lost with the sandbox scratch directory. Since the database
+had **zero** push subscriptions, a fresh key pair was generated and verified:
+
+- the private scalar really is the partner of the public point (ECDH round-trip),
+- our module's VAPID JWT verifies under the public key with Node's crypto,
+- the JWT carries the right `aud` and `sub`.
+
+The **public** half now sits in `config.js`; the **private** half was written straight
+into Supabase secrets and is not stored anywhere in the workspace or in Git.
+
+| Secret | Set |
+|---|---|
+| `RB_VAPID_PRIVATE_KEY` | ✅ |
+| `RB_VAPID_PUBLIC_KEY` | ✅ |
+| `RB_VAPID_SUBJECT` | ✅ |
+
+### 2d. Edge Functions deployed
+
+| Function | Status | JWT |
 |---|---|---|
-| Migration on the **live** project | The Arena → Supabase connection is on a **different account** and cannot see the RegisterBook organisation | Reconnect the Supabase account that owns RegisterBook (ref `tmkpdvljhnlnvbckbnsc`) |
-| RLS proven against the **live** database | Same reason | Same — then I will run the proof inside a transaction that is rolled back, so nothing changes |
-| The two **Edge Functions deployed** | Same reason | Same |
-| **Real push delivery** on a phone | Requires the deployed function + a real device | The owner must test with two accounts on two phones |
-| **Real audio/video calls** | Requires two real devices and possibly a TURN relay | The owner must test; the app states plainly when a relay is missing |
-| **Offline install / Add to Home Screen** | Needs a real phone | The owner must test |
+| `rb-notify` | **ACTIVE** | verified |
+| `rb-delete-account` | **ACTIVE** | verified |
 
-**Nothing above is claimed to work.** If the Edge Function cannot be deployed, the app
-tells the user honestly: *“Recorded as a pending deletion request — a manager will
-process it.”* It never pretends.
+### 2e. Auth configuration (checked, already correct)
+
+- Site URL: `https://mahicouragw.github.io/Register-book/`
+- Redirect allow-list extended with this session's preview host.
+- Google provider: **enabled**.
 
 ---
 
-## 3. Two-account phone test script
+## 3. What is still NOT verified — please read
+
+| Not verified | Why | What is needed |
+|---|---|---|
+| **Real push delivery** on a phone | Needs a real device that has subscribed | The owner must test with two accounts on two phones |
+| **Real audio/video calls** | Needs two real devices, and a TURN relay on many mobile networks | The owner must test; the app says plainly when a relay is missing |
+| **Add to Home Screen** / offline | Needs a real phone | The owner must test |
+| **That a notification arrives while the app is closed** | The highest-value test, and only a phone can prove it | Step 6 of the script below |
+
+**Nothing above is claimed to work.** If account deletion cannot reach the Edge
+Function, the app says honestly: *“Recorded as a pending deletion request — a manager
+will process it.”* It never pretends.
+
+---
+
+## 4. Two-account phone test script
 
 You need **two devices** (or one phone + one computer) and **two Google accounts**.
 
@@ -168,12 +245,15 @@ Sign in as **Account A** on device 1 and **Account B** on device 2.
 
 ---
 
-## 4. Honest summary
+## 5. Honest summary
 
 **Proven by code and tests:** the interface, the writing fix, the Terms and Privacy
-screens, the invite flow, the security rules in SQL, the wording of every notification,
-and the Web Push encryption itself.
+screens, the invite flow, the wording of every notification, and the Web Push
+encryption itself.
+
+**Proven against the live database:** the migration really ran, all 15 tables have RLS
+on, and 33 security checks pass as owner, as shared reader and as an outsider.
 
 **Not proven yet:** that a notification actually arrives on your phone, and that a call
-actually connects. Those need the database migration, the deployed Edge Functions, and
+actually connects. The database and the Edge Functions are live now; what is missing is
 two real phones — and I will not say they work until you have seen them work.
