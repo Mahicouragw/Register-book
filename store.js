@@ -584,7 +584,7 @@
       .select().single();
     if (error) throw new Error(friendlyDbError(error));
     DB.directMessages.push({ id: data.id, senderId: data.sender_id, receiverId: data.receiver_id, text: data.text, createdAt: data.created_at });
-    notifyRemote({ type: "message", recipientId: userId, senderId: me.id, sender: me.name, text }).catch(() => {});
+    notifyRemote({ type: "message", recipientId: userId, senderId: me.id, sender: me.name, text, messageId: data.id }).catch(() => {});
     return msg;
   }
 

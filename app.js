@@ -1920,8 +1920,10 @@
     const st = $("#callStatus"), acts = $("#callActions");
     const kind = (state.call && state.call.kind) || "audio";
     const vid = $("#remoteVideo"), self = $("#localVideo");
+    const card = overlay.querySelector(".call-card");
+    if (card) card.classList.toggle("has-video", kind === "video");
     if (self) self.style.display = (kind === "video" && (phase === "connecting" || phase === "connected")) ? "block" : "none";
-    if (vid) vid.style.display = (kind === "video" && phase === "connected") ? "block" : "none";
+    if (vid) vid.style.display = kind === "video" ? "block" : "none";
     clearInterval(callTimer);
 
     if (phase === "outgoing") {

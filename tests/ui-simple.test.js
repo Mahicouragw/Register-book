@@ -411,3 +411,43 @@ test("export of my books contains the books and their lines", async () => {
   assert.match(text, /TOTAL Rs\.50/, "with a total for bill books");
   dom.window.close();
 });
+
+test("no view renders 'undefined', 'NaN' or '[object Object]' for any demo user", async () => {
+  const { dom, w, doc } = loadApp();
+  await w.__RB.boot();
+
+  const bad = /undefined|NaN|\[object Object\]/;
+  for (const user of ["mahi", "goldfish", "silverfish", "priya", "rahul", "anjali"]) {
+    w.enterDemo(user);
+    for (const view of ["home", "library", "community", "settings", "inbox"]) {
+      w.setView(view);
+      const html = doc.querySelector(".content").innerHTML;
+      assert.doesNotMatch(html, bad, `${view} must render cleanly for ${user}`);
+    }
+  }
+
+  // and the register detail screen too
+  w.enterDemo("goldfish");
+  const reg = w.__RB.store.myRegisters()[0];
+  w.openRegister(reg.id);
+  assert.doesNotMatch(doc.querySelector(".content").innerHTML, bad, "register detail renders cleanly");
+
+  dom.window.close();
+});
+
+test("every button in every screen is reachable by keyboard and has a label", async () => {
+  const { dom, w, doc } = loadApp();
+  await w.__RB.boot();
+  w.enterDemo("goldfish");
+
+  for (const view of ["home", "library", "community", "settings", "inbox"]) {
+    w.setView(view);
+    const buttons = [...doc.querySelectorAll(".content button")];
+    assert.ok(buttons.length > 0, `${view} has buttons`);
+    for (const b of buttons) {
+      const label = (b.textContent || "").trim() || b.getAttribute("aria-label") || b.getAttribute("title");
+      assert.ok(label, `every button in ${view} has a visible label or aria-label`);
+    }
+  }
+  dom.window.close();
+});

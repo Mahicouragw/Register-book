@@ -125,5 +125,6 @@
   const API = { CODE_ALPHABET, randomCode, joinUrl, clip, wording, deepLink };
 
   if (typeof window !== "undefined") window.RBNotifyText = API;
+  if (typeof globalThis !== "undefined") globalThis.RBNotifyText = API;
   if (typeof module !== "undefined" && module.exports) module.exports = API;
 })();
