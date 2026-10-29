@@ -71,7 +71,7 @@ function build(name) {
   return { outFile, bytes: Buffer.byteLength(code) };
 }
 
-const NAMES = ["rb-notify", "rb-delete-account"];
+const NAMES = ["rb-notify", "rb-delete-account", "rb-turn-credentials"];
 let failed = false;
 for (const n of NAMES) {
   try {

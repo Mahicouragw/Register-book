@@ -16,7 +16,7 @@ function readBuilt(name) {
 }
 
 test("the generated Edge Functions are valid TypeScript and self-contained", () => {
-  for (const name of ["rb-notify", "rb-delete-account"]) {
+  for (const name of ["rb-notify", "rb-delete-account", "rb-turn-credentials"]) {
     const code = readBuilt(name);
 
     // 1. nothing relative is imported any more (the runtime would not find it)
