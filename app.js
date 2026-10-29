@@ -350,7 +350,10 @@
     community: ["Community", "People, friends, groups and chats"],
     settings: ["Settings", "Your account, notifications and legal"],
     inbox: ["Notifications", "Messages, friend requests, group invites and calls"],
-    registerDetail: ["Register book", "10 lines per page • unlimited pages"]
+    registerDetail: ["Register book", "10 lines per page • unlimited pages"],
+    qbookEditor: ["Question book", "Write your questions • add pages any time"],
+    qbookAnswer: ["Answer book", "Answer on the lined pages • save and continue later"],
+    qbookResults: ["Completed book", "Every original question with the answer given"]
   };
   function renderTopbar() {
     const t = TITLES[state.view] || TITLES.home;
@@ -368,6 +371,9 @@
     }
     if (state.view === "inbox") {
       html += `<button class="btn btn-sm" onclick="markAllNotificationsRead()">Mark all read</button>`;
+    }
+    if (state.view === "qbookEditor" || state.view === "qbookAnswer" || state.view === "qbookResults") {
+      html += `<button class="btn btn-sm" onclick="setView('library')">← Back to library</button>`;
     }
     if (state.view === "registerDetail") {
       html += `<button class="btn btn-sm" onclick="backToLibrary()">← Back to books</button>`;
@@ -388,6 +394,7 @@
   // Which tab is "current" when a sub-screen (inbox, a register, a chat) is open.
   function tabForView(name) {
     if (name === "registerDetail") return "library";
+    if (name === "qbookEditor" || name === "qbookAnswer" || name === "qbookResults") return "library";
     if (name === "inbox") return "home";
     return name;
   }
@@ -942,6 +949,15 @@
       </div>`;
   }
 
+  // The question-book screens live in qbooks-ui.js. They are optional, so the
+  // rest of the app keeps working even if that file failed to load.
+  function renderQuestionBooks() {
+    if (window.RBQBooksUI && window.RBQBooksUI.render) window.RBQBooksUI.render();
+  }
+  function refreshQuestionBookScreens() {
+    if (window.RBQBooksUI && window.RBQBooksUI.refresh) window.RBQBooksUI.refresh();
+  }
+
   function renderAll() {
     if (!S.me) return;
     renderHeader();
@@ -955,6 +971,8 @@
     renderSettings();
     renderRegisterDetail();
     if (state.view === "registerDetail" && !regById(state.reg.id)) state.view = "home";
+    renderQuestionBooks();
+    refreshQuestionBookScreens();
     renderTopbar();
     showView();
   }
@@ -2521,6 +2539,8 @@
     handleGoogleLogin, handleSignOut, enterDemo, demoStory,
     handleFriend: respondFriend,
     toast, toggleSidebar, manualRefresh,
+    // shared helpers, used by qbooks-ui.js
+    esc, fmtDay, profileOf, renderAll, renderTopbar, renderQuestionBooks,
     openSetupModal, closeSetupModal, copyText, runDiagnostics
   });
 

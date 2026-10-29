@@ -62,7 +62,9 @@
   const DB = {
     profiles: [], registers: [], entries: [], shares: [], groups: [], groupMembers: [],
     groupMessages: [], friendRequests: [], directMessages: [],
-    groupInvites: [], notifications: [], calls: [], callSignals: [], accountDeletions: []
+    groupInvites: [], notifications: [], calls: [], callSignals: [], accountDeletions: [],
+    // ---- Questions Register Books ----
+    qbooks: [], qpages: [], qquestions: [], qoptions: [], qcopies: [], qanswers: []
   };
   let mode = "demo";
   let me = null;
@@ -88,7 +90,7 @@
   function persist() {
     if (mode !== "demo") return;
     try {
-      localStorage.setItem(LS_KEY, JSON.stringify({ v: 4, savedAt: new Date().toISOString(), ...DB }));
+      localStorage.setItem(LS_KEY, JSON.stringify({ v: 5, savedAt: new Date().toISOString(), ...DB }));
     } catch (e) { /* storage may be blocked; keep in memory */ }
   }
   function demoUserId() {
@@ -159,6 +161,35 @@
       { id: "gm_2", groupId: "grp_ward", senderId: "silverfish", text: "Thanks! I can read every page. I see it is view-only for me — correct.", createdAt: new Date(y, m, 5, 12, 30).toISOString() }
     );
 
+    // ---- Questions Register Book (demo) ---------------------------------
+    // Goldfish wrote a safety quiz and sent it to Silverfish, so the whole
+    // send -> answer -> submit -> return flow can be tried without a server.
+    DB.qbooks.push({ id: "qb_safety", ownerId: "goldfish", title: "Ward Safety Quiz", createdAt: new Date(y, m, 3, 9, 0).toISOString(), updatedAt: new Date(y, m, 3, 9, 0).toISOString() });
+    ["qp_s1", "qp_s2"].forEach((pid, i) => {
+      DB.qpages.push({ id: pid, bookId: "qb_safety", pageNo: i + 1 });
+    });
+    DB.qquestions.push(
+      { id: "qq_1", bookId: "qb_safety", pageId: "qp_s1", qNo: 1, text: "What is the first thing you do when a patient falls?", hasChoices: true, hasWritten: false, writtenLabel: "Written answer" },
+      { id: "qq_2", bookId: "qb_safety", pageId: "qp_s1", qNo: 2, text: "Where is the emergency oxygen cylinder kept?", hasChoices: true, hasWritten: true, writtenLabel: "Describe the location" },
+      { id: "qq_3", bookId: "qb_safety", pageId: "qp_s2", qNo: 3, text: "Who must you call before moving a patient to another ward?", hasChoices: false, hasWritten: true, writtenLabel: "Name the person and the number" }
+    );
+    DB.qoptions.push(
+      { id: "qo_1a", questionId: "qq_1", label: "A", text: "Call the duty doctor" },
+      { id: "qo_1b", questionId: "qq_1", label: "B", text: "Check the patient and do not move them" },
+      { id: "qo_1c", questionId: "qq_1", label: "C", text: "Help them back into bed at once" },
+      { id: "qo_1d", questionId: "qq_1", label: "D", text: "Write it in the register later" },
+      { id: "qo_2a", questionId: "qq_2", label: "A", text: "Ward A store room" },
+      { id: "qo_2b", questionId: "qq_2", label: "B", text: "Next to the nurse station" },
+      { id: "qo_2c", questionId: "qq_2", label: "C", text: "In the corridor cupboard" },
+      { id: "qo_2d", questionId: "qq_2", label: "D", text: "Outside the ward door" }
+    );
+    DB.qcopies.push({
+      id: "qc_safety_silver", bookId: "qb_safety", senderId: "goldfish", recipientId: "silverfish",
+      status: "sent", revision: 1, senderNote: "Please complete this by Friday.",
+      sentAt: new Date(y, m, 7, 10, 0).toISOString(),
+      receivedAt: null, submittedAt: null, returnedAt: null
+    });
+
     // Friends
     DB.friendRequests.push(
       { id: "fr_1", fromUser: "goldfish", toUser: "silverfish", status: "accepted", createdAt: new Date(y, m, 2, 11, 0).toISOString() },
@@ -178,7 +209,9 @@
     setupError = "";
     blankDB();
     const blob = readDemo();
-    if (blob && blob.v === 4 && Array.isArray(blob.profiles) && blob.profiles.length) {
+    // v4 was the old payload shape; v5 adds the six question-book tables.
+    // Both restore safely, because hydrate() just copies over the known arrays.
+    if (blob && (blob.v === 5 || blob.v === 4) && Array.isArray(blob.profiles) && blob.profiles.length) {
       hydrate(blob);
     } else {
       seed();
@@ -262,6 +295,57 @@
     DB.groupInvites = invites.map(x => ({ id: x.id, groupId: x.group_id, code: x.code, invitedUserId: x.invited_user_id, invitedEmail: x.invited_email, createdBy: x.created_by, status: x.status, createdAt: x.created_at, respondedAt: x.responded_at }));
     DB.notifications = notes.map(x => ({ id: x.id, userId: x.user_id, type: x.type, title: x.title, body: x.body || "", data: x.data || {}, read: !!x.read, createdAt: x.created_at }));
     DB.calls = calls.map(x => ({ id: x.id, callerId: x.caller_id, calleeId: x.callee_id, kind: x.kind, status: x.status, createdAt: x.created_at, answeredAt: x.answered_at, endedAt: x.ended_at }));
+
+    // ---- Questions Register Books -------------------------------------
+    // Only books I own or that were sent to me are visible, because RLS on
+    // rb_qbooks / rb_qbook_copies already filters everything else out.
+    const qcopiesRaw = await sel(
+      supa.from("rb_qbook_copies").select("*").order("sent_at", { ascending: false }),
+      "question book copies");
+
+    DB.qcopies = qcopiesRaw.map(c => ({
+      id: c.id, bookId: c.book_id, senderId: c.sender_id, recipientId: c.recipient_id,
+      status: c.status, revision: c.revision, senderNote: c.sender_note || "",
+      sentAt: c.sent_at, receivedAt: c.received_at, submittedAt: c.submitted_at, returnedAt: c.returned_at
+    }));
+
+    const qbookIds = [
+      ...new Set([
+        ...(await sel(supa.from("rb_qbooks").select("id").eq("owner_id", uid_), "my question books")).map(b => b.id),
+        ...DB.qcopies.map(c => c.bookId)
+      ])
+    ];
+
+    if (qbookIds.length) {
+      const [qbooks, qpages, qquestions] = await Promise.all([
+        sel(supa.from("rb_qbooks").select("*").in("id", qbookIds).order("created_at", { ascending: false }), "question books"),
+        sel(supa.from("rb_qpages").select("*").in("book_id", qbookIds).order("page_no", { ascending: true }), "question pages"),
+        sel(supa.from("rb_questions").select("*").in("book_id", qbookIds).order("q_no", { ascending: true }), "questions")
+      ]);
+      const qIds = qquestions.map(q => q.id);
+      const [qoptions, qanswers] = await Promise.all([
+        qIds.length ? sel(supa.from("rb_qoptions").select("*").in("question_id", qIds), "question options") : [],
+        DB.qcopies.length
+          ? sel(supa.from("rb_qanswers").select("*").in("copy_id", DB.qcopies.map(c => c.id)), "question answers")
+          : []
+      ]);
+
+      DB.qbooks = qbooks.map(b => ({ id: b.id, ownerId: b.owner_id, title: b.title, createdAt: b.created_at, updatedAt: b.updated_at }));
+      DB.qpages = qpages.map(p => ({ id: p.id, bookId: p.book_id, pageNo: p.page_no }));
+      DB.qquestions = qquestions.map(q => ({
+        id: q.id, bookId: q.book_id, pageId: q.page_id, qNo: q.q_no, text: q.text,
+        hasChoices: !!q.has_choices, hasWritten: !!q.has_written,
+        writtenLabel: q.written_label || "Written answer"
+      }));
+      DB.qoptions = qoptions.map(o => ({ id: o.id, questionId: o.question_id, label: o.label, text: o.text || "" }));
+      DB.qanswers = qanswers.map(a => ({
+        id: a.id, copyId: a.copy_id, questionId: a.question_id,
+        selectedLabel: a.selected_label || "", writtenAnswer: a.written_answer || "", updatedAt: a.updated_at
+      }));
+    } else {
+      DB.qbooks = []; DB.qpages = []; DB.qquestions = []; DB.qoptions = []; DB.qanswers = [];
+    }
+
     lastLoadedAt = new Date().toISOString();
   }
 
@@ -304,6 +388,12 @@
   }
   async function upd(table, id, patch) {
     const { error } = await supa.from(table).update(patch).eq("id", id);
+    if (error) throw new Error(friendlyDbError(error));
+  }
+  // Insert, or update when the row is already there. Used for answers, which
+  // the recipient saves over and over while they work through a book.
+  async function upsert(table, row, onConflict) {
+    const { error } = await supa.from(table).upsert(row, { onConflict });
     if (error) throw new Error(friendlyDbError(error));
   }
 
@@ -1043,6 +1133,16 @@
     savePushSubscription, deletePushSubscription,
     startCall, updateCallStatus, activeCall, sendCallSignal, callSignals, fetchCallSignals,
     notifyRemote, fetchTurnCredentials,
-    accountSummary, exportMyBooks, requestAccountDeletion, deleteAccountNow
+    accountSummary, exportMyBooks, requestAccountDeletion, deleteAccountNow,
+
+    // ---- used by qbooks.js (the Questions Register Book feature) ----
+    // These are the same primitives the rest of the store uses internally;
+    // they are exposed so the question-book code can live in its own file.
+    persistDemo() { persist(); },
+    cloudInsert: ins,
+    cloudUpdate: upd,
+    cloudDelete: del,
+    cloudUpsert: upsert,
+    cloudRefresh: refreshCloud
   };
 })();

@@ -44,6 +44,8 @@ function makeMockSupabase(initial = {}) {
     rb_group_members: [], rb_group_messages: [], rb_friend_requests: [], rb_direct_messages: [],
     rb_group_invites: [], rb_push_subscriptions: [], rb_notifications: [],
     rb_account_deletions: [], rb_calls: [], rb_call_signals: [],
+    rb_qbooks: [], rb_qpages: [], rb_questions: [], rb_qoptions: [],
+    rb_qbook_copies: [], rb_qanswers: [],
     ...JSON.parse(JSON.stringify(initial))
   };
   const state = { me: GOLD };
@@ -90,6 +92,19 @@ function makeMockSupabase(initial = {}) {
       case "rb_calls": return rows.filter(c => c.caller_id === state.me || c.callee_id === state.me);
       case "rb_call_signals": return rows.filter(sg =>
         db.rb_calls.some(c => c.id === sg.call_id && (c.caller_id === state.me || c.callee_id === state.me)));
+      // --- question books ---
+      case "rb_qbook_copies": return rows.filter(c => c.sender_id === state.me || c.recipient_id === state.me);
+      case "rb_qbooks": return rows.filter(b => b.owner_id === state.me ||
+        db.rb_qbook_copies.some(c => c.book_id === b.id && (c.sender_id === state.me || c.recipient_id === state.me)));
+      case "rb_qpages": return rows.filter(p =>
+        db.rb_qbooks.some(b => b.id === p.book_id && (b.owner_id === state.me ||
+          db.rb_qbook_copies.some(c => c.book_id === b.id && (c.sender_id === state.me || c.recipient_id === state.me)))));
+      case "rb_questions": return rows.filter(q =>
+        db.rb_qbooks.some(b => b.id === q.book_id && (b.owner_id === state.me ||
+          db.rb_qbook_copies.some(c => c.book_id === b.id && (c.sender_id === state.me || c.recipient_id === state.me)))));
+      case "rb_qoptions": return rows.filter(o => db.rb_questions.some(q => q.id === o.question_id));
+      case "rb_qanswers": return rows.filter(a => db.rb_qbook_copies.some(c =>
+        c.id === a.copy_id && (c.sender_id === state.me || c.recipient_id === state.me)));
       default: return [];
     }
   }
@@ -132,6 +147,21 @@ function makeMockSupabase(initial = {}) {
       case "rb_group_invites":
         return db.rb_groups.some(g => g.id === row.group_id && g.created_by === state.me) && row.created_by === state.me
           ? null : rls(table);
+      // --- question books: only the creator may change the book, and only the
+      //     recipient may write answers to a copy addressed to them. ---
+      case "rb_qbooks": return row.owner_id === state.me ? null : rls(table);
+      case "rb_qpages":
+      case "rb_questions":
+        return db.rb_qbooks.some(b => b.id === row.book_id && b.owner_id === state.me) ? null : rls(table);
+      case "rb_qoptions":
+        return db.rb_questions.some(q => q.id === row.question_id &&
+          db.rb_qbooks.some(b => b.id === q.book_id && b.owner_id === state.me)) ? null : rls(table);
+      case "rb_qbook_copies":
+        if (mode === "insert") return row.sender_id === state.me ? null : rls(table);
+        return db.rb_qbook_copies.some(c => c.id === row.id &&
+          (c.sender_id === state.me || c.recipient_id === state.me)) ? null : rls(table);
+      case "rb_qanswers":
+        return db.rb_qbook_copies.some(c => c.id === row.copy_id && c.recipient_id === state.me) ? null : rls(table);
       default: return { message: `relation "public.${table}" does not exist` };
     }
   }

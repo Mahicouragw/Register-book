@@ -775,8 +775,311 @@ begin
   end if;
 end$$;
 
+-- ============================================================================
+-- PART 4 — "Create Questions Register Book"
+-- A question book is a notebook of pages, questions and multiple-choice
+-- options that the creator sends to another member of staff. The recipient
+-- answers it and sends it back. The ORIGINAL is never overwritten: every
+-- send creates a separate "copy" row, and the answers belong to that copy.
+--
+-- Lifecycle of a copy:
+--   draft (owner still writing) -> sent -> received -> in_progress
+--     -> submitted -> returned_to_creator
+-- ============================================================================
+
+-- ---------------------------------------------------------------- tables
+create table if not exists public.rb_qbooks (
+  id text primary key,
+  owner_id uuid not null references auth.users(id) on delete cascade,
+  title text not null,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+create index if not exists rb_qbooks_owner_idx on public.rb_qbooks(owner_id);
+
+create table if not exists public.rb_qpages (
+  id text primary key,
+  book_id text not null references public.rb_qbooks(id) on delete cascade,
+  page_no integer not null check (page_no > 0),
+  created_at timestamptz not null default now()
+);
+create index if not exists rb_qpages_book_idx on public.rb_qpages(book_id, page_no);
+create unique index if not exists rb_qpages_book_page_uq on public.rb_qpages(book_id, page_no);
+
+create table if not exists public.rb_questions (
+  id text primary key,
+  book_id text not null references public.rb_qbooks(id) on delete cascade,
+  page_id text not null references public.rb_qpages(id) on delete cascade,
+  q_no integer not null check (q_no > 0),
+  text text not null,
+  has_choices boolean not null default true,
+  has_written boolean not null default false,
+  written_label text not null default 'Written answer',
+  created_at timestamptz not null default now()
+);
+create index if not exists rb_questions_book_idx on public.rb_questions(book_id);
+create index if not exists rb_questions_page_idx on public.rb_questions(page_id, q_no);
+
+create table if not exists public.rb_qoptions (
+  id text primary key,
+  question_id text not null references public.rb_questions(id) on delete cascade,
+  label text not null check (label in ('A','B','C','D')),
+  text text not null default '',
+  created_at timestamptz not null default now()
+);
+create unique index if not exists rb_qoptions_q_label_uq on public.rb_qoptions(question_id, label);
+
+-- One row per (book, recipient, revision). Never overwrites the original book
+-- and never overwrites an earlier submission - a resubmission is revision + 1.
+create table if not exists public.rb_qbook_copies (
+  id text primary key,
+  book_id text not null references public.rb_qbooks(id) on delete cascade,
+  sender_id uuid not null references auth.users(id) on delete cascade,
+  recipient_id uuid not null references auth.users(id) on delete cascade,
+  status text not null default 'sent'
+    check (status in ('sent','received','in_progress','submitted','returned_to_creator')),
+  revision integer not null default 1 check (revision > 0),
+  sender_note text,
+  sent_at timestamptz not null default now(),
+  received_at timestamptz,
+  submitted_at timestamptz,
+  returned_at timestamptz
+);
+create index if not exists rb_qcopies_book_idx on public.rb_qbook_copies(book_id);
+create index if not exists rb_qcopies_recipient_idx on public.rb_qbook_copies(recipient_id, status);
+create index if not exists rb_qcopies_sender_idx on public.rb_qbook_copies(sender_id, status);
+
+create table if not exists public.rb_qanswers (
+  id text primary key,
+  copy_id text not null references public.rb_qbook_copies(id) on delete cascade,
+  question_id text not null references public.rb_questions(id) on delete cascade,
+  selected_label text check (selected_label in ('A','B','C','D')),
+  written_answer text,
+  updated_at timestamptz not null default now()
+);
+create unique index if not exists rb_qanswers_copy_q_uq on public.rb_qanswers(copy_id, question_id);
+create index if not exists rb_qanswers_copy_idx on public.rb_qanswers(copy_id);
+
+-- ---------------------------------------------------------------- RLS on
+alter table public.rb_qbooks       enable row level security;
+alter table public.rb_qpages       enable row level security;
+alter table public.rb_questions    enable row level security;
+alter table public.rb_qoptions     enable row level security;
+alter table public.rb_qbook_copies enable row level security;
+alter table public.rb_qanswers     enable row level security;
+
+-- ---------------------------------------------------------------- helpers
+-- SECURITY DEFINER so a policy can ask "may I see this book?" without
+-- recursing into the very table the policy protects.
+create or replace function public.rb_qbook_is_owner(bid text)
+returns boolean
+language sql stable security definer set search_path = public
+as $$
+  select exists (
+    select 1 from public.rb_qbooks b
+    where b.id = bid and b.owner_id = auth.uid()
+  );
+$$;
+
+-- Anyone who has been sent this book may READ it (never write to it).
+create or replace function public.rb_qbook_is_recipient(bid text)
+returns boolean
+language sql stable security definer set search_path = public
+as $$
+  select exists (
+    select 1 from public.rb_qbook_copies c
+    where c.book_id = bid and c.recipient_id = auth.uid()
+  );
+$$;
+
+create or replace function public.rb_qcopy_is_recipient(cid text)
+returns boolean
+language sql stable security definer set search_path = public
+as $$
+  select exists (
+    select 1 from public.rb_qbook_copies c
+    where c.id = cid and c.recipient_id = auth.uid()
+  );
+$$;
+
+create or replace function public.rb_qcopy_is_sender(cid text)
+returns boolean
+language sql stable security definer set search_path = public
+as $$
+  select exists (
+    select 1 from public.rb_qbook_copies c
+    where c.id = cid and c.sender_id = auth.uid()
+  );
+$$;
+
+-- ---------------------------------------------------------------- policies: books
+drop policy if exists rb_qbooks_read on public.rb_qbooks;
+create policy rb_qbooks_read on public.rb_qbooks
+  for select to authenticated using (
+    owner_id = auth.uid() or public.rb_qbook_is_recipient(id)
+  );
+
+drop policy if exists rb_qbooks_insert on public.rb_qbooks;
+create policy rb_qbooks_insert on public.rb_qbooks
+  for insert to authenticated with check (owner_id = auth.uid());
+
+drop policy if exists rb_qbooks_update on public.rb_qbooks;
+create policy rb_qbooks_update on public.rb_qbooks
+  for update to authenticated using (owner_id = auth.uid())
+  with check (owner_id = auth.uid());
+
+drop policy if exists rb_qbooks_delete on public.rb_qbooks;
+create policy rb_qbooks_delete on public.rb_qbooks
+  for delete to authenticated using (owner_id = auth.uid());
+
+-- ---------------------------------------------------------------- policies: pages
+drop policy if exists rb_qpages_read on public.rb_qpages;
+create policy rb_qpages_read on public.rb_qpages
+  for select to authenticated using (
+    public.rb_qbook_is_owner(book_id) or public.rb_qbook_is_recipient(book_id)
+  );
+
+drop policy if exists rb_qpages_insert on public.rb_qpages;
+create policy rb_qpages_insert on public.rb_qpages
+  for insert to authenticated with check (public.rb_qbook_is_owner(book_id));
+
+drop policy if exists rb_qpages_update on public.rb_qpages;
+create policy rb_qpages_update on public.rb_qpages
+  for update to authenticated using (public.rb_qbook_is_owner(book_id))
+  with check (public.rb_qbook_is_owner(book_id));
+
+drop policy if exists rb_qpages_delete on public.rb_qpages;
+create policy rb_qpages_delete on public.rb_qpages
+  for delete to authenticated using (public.rb_qbook_is_owner(book_id));
+
+-- ---------------------------------------------------------------- policies: questions
+drop policy if exists rb_questions_read on public.rb_questions;
+create policy rb_questions_read on public.rb_questions
+  for select to authenticated using (
+    public.rb_qbook_is_owner(book_id) or public.rb_qbook_is_recipient(book_id)
+  );
+
+drop policy if exists rb_questions_insert on public.rb_questions;
+create policy rb_questions_insert on public.rb_questions
+  for insert to authenticated with check (public.rb_qbook_is_owner(book_id));
+
+drop policy if exists rb_questions_update on public.rb_questions;
+create policy rb_questions_update on public.rb_questions
+  for update to authenticated using (public.rb_qbook_is_owner(book_id))
+  with check (public.rb_qbook_is_owner(book_id));
+
+drop policy if exists rb_questions_delete on public.rb_questions;
+create policy rb_questions_delete on public.rb_questions
+  for delete to authenticated using (public.rb_qbook_is_owner(book_id));
+
+-- ---------------------------------------------------------------- policies: options
+-- Options follow their question's book, so they use the same helpers through
+-- a SECURITY DEFINER lookup on the parent question.
+create or replace function public.rb_qoption_book(qid text)
+returns text
+language sql stable security definer set search_path = public
+as $$
+  select book_id from public.rb_questions where id = qid;
+$$;
+
+drop policy if exists rb_qoptions_read on public.rb_qoptions;
+create policy rb_qoptions_read on public.rb_qoptions
+  for select to authenticated using (
+    public.rb_qbook_is_owner(public.rb_qoption_book(question_id))
+    or public.rb_qbook_is_recipient(public.rb_qoption_book(question_id))
+  );
+
+drop policy if exists rb_qoptions_write on public.rb_qoptions;
+create policy rb_qoptions_write on public.rb_qoptions
+  for all to authenticated
+  using (public.rb_qbook_is_owner(public.rb_qoption_book(question_id)))
+  with check (public.rb_qbook_is_owner(public.rb_qoption_book(question_id)));
+
+-- ---------------------------------------------------------------- policies: copies
+drop policy if exists rb_qbook_copies_read on public.rb_qbook_copies;
+create policy rb_qbook_copies_read on public.rb_qbook_copies
+  for select to authenticated using (
+    sender_id = auth.uid() or recipient_id = auth.uid()
+  );
+
+-- Only the owner of the book may send it, and only in their own name.
+drop policy if exists rb_qbook_copies_insert on public.rb_qbook_copies;
+create policy rb_qbook_copies_insert on public.rb_qbook_copies
+  for insert to authenticated with check (
+    sender_id = auth.uid()
+    and sender_id <> recipient_id
+    and public.rb_qbook_is_owner(book_id)
+  );
+
+-- The recipient moves it forward (received -> in_progress -> submitted ->
+-- returned). The sender may only reopen it to ask for a revision.
+drop policy if exists rb_qbook_copies_update on public.rb_qbook_copies;
+create policy rb_qbook_copies_update on public.rb_qbook_copies
+  for update to authenticated
+  using (sender_id = auth.uid() or recipient_id = auth.uid())
+  with check (sender_id = auth.uid() or recipient_id = auth.uid());
+
+drop policy if exists rb_qbook_copies_delete on public.rb_qbook_copies;
+create policy rb_qbook_copies_delete on public.rb_qbook_copies
+  for delete to authenticated using (sender_id = auth.uid());
+
+-- ---------------------------------------------------------------- policies: answers
+-- The recipient writes and rewrites their own answers. The sender may read
+-- them once the copy is no longer a secret to them (submitted or returned).
+drop policy if exists rb_qanswers_read on public.rb_qanswers;
+create policy rb_qanswers_read on public.rb_qanswers
+  for select to authenticated using (
+    public.rb_qcopy_is_recipient(copy_id)
+    or public.rb_qcopy_is_sender(copy_id)
+  );
+
+drop policy if exists rb_qanswers_write on public.rb_qanswers;
+create policy rb_qanswers_write on public.rb_qanswers
+  for all to authenticated
+  using (public.rb_qcopy_is_recipient(copy_id))
+  with check (public.rb_qcopy_is_recipient(copy_id));
+
+-- ---------------------------------------------------------------- grants
+revoke all on public.rb_qbooks       from anon;
+revoke all on public.rb_qpages       from anon;
+revoke all on public.rb_questions    from anon;
+revoke all on public.rb_qoptions     from anon;
+revoke all on public.rb_qbook_copies from anon;
+revoke all on public.rb_qanswers     from anon;
+
+grant select, insert, update, delete on public.rb_qbooks   to authenticated;
+grant select, insert, update, delete on public.rb_qpages   to authenticated;
+grant select, insert, update, delete on public.rb_questions to authenticated;
+grant select, insert, update, delete on public.rb_qoptions to authenticated;
+grant select, insert, update, delete on public.rb_qbook_copies to authenticated;
+grant select, insert, update, delete on public.rb_qanswers to authenticated;
+
+grant execute on function public.rb_qbook_is_owner(text) to authenticated;
+grant execute on function public.rb_qbook_is_recipient(text) to authenticated;
+grant execute on function public.rb_qcopy_is_recipient(text) to authenticated;
+grant execute on function public.rb_qcopy_is_sender(text) to authenticated;
+grant execute on function public.rb_qoption_book(text) to authenticated;
+
+-- ---------------------------------------------------------------- realtime
+do $$
+declare
+  t text;
+begin
+  if exists (select 1 from pg_publication where pubname = 'supabase_realtime') then
+    foreach t in array array['rb_qbook_copies', 'rb_qanswers']
+      loop
+        begin
+          execute format('alter publication supabase_realtime add table public.%I', t);
+        exception
+          when duplicate_object then null;
+          when others then null;
+        end;
+      end loop;
+  end if;
+end$$;
+
 -- ---------------------------------------------------------------- check
--- Expect 15 rows and row_security = true for every one of them.
+-- Expect 21 rows and row_security = true for every one of them.
 select tablename, rowsecurity
 from pg_tables
 where schemaname = 'public' and tablename like 'rb\_%'
