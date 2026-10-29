@@ -17,7 +17,7 @@ notifications** and **real audio/video calling**.
 | **🏠 Home** | Today's date, a greeting, **New for you** (unread notifications), a short list of your books, and **one big green button** to create a register. Nothing else. |
 | **📒 Library** | **My register books** (badge: `OWNER — you can edit`) and **Shared with me** (badge: `VIEW-ONLY — you can read and search, not edit`). Big rows. Opening a book shows the paper pages. |
 | **👥 Community** | Search people, friend requests with **Accept / Decline**, groups you are in, **Join a group** with an invite code, group invites waiting for you, and private chats with **📞 Audio** / **🎥 Video** call buttons. |
-| **⚙️ Settings** | Your Google photo, name and email, **Sign out**, the notification switch, **Send test notification**, Terms & Conditions, Privacy Policy, **Delete my account**, and the owner setup guide. |
+| **⚙️ Settings** | Your Google photo, name and email, **Sign out**, the notification switch, **Send test notification**, Terms & Conditions, Privacy Policy, and **Delete my account**. |
 
 That is the whole app. Four buttons at the bottom of the phone, nothing hidden in a
 sidebar. Everything else in this README is setup detail.

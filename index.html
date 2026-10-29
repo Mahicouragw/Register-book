@@ -36,7 +36,6 @@
 
       <div class="demo-chips" id="gateDemoChips"></div>
 
-      <div class="gate-foot" style="margin-top:10px"><button class="btn btn-sm btn-ghost" onclick="openSetupModal()">🔧 Owner setup guide — Google &amp; Supabase steps</button></div>
       <div class="gate-foot">
         Staff have to buy many expensive paper books — Medical Checklist, Bill Book, Attendance, Stock… This app replaces them with shared digital books.<br>
         <span class="muted">Only the creator can edit. View-only access is enforced by Row Level Security in the database, not just by hiding buttons.</span>
@@ -223,17 +222,6 @@
     <div class="modal-card">
       <div class="modal-head"><h3 id="joinModalTitle">Group invite</h3><button class="btn btn-sm" onclick="closeJoinModal()" aria-label="Close">✕</button></div>
       <div class="modal-body" id="joinBody"></div>
-    </div>
-  </div>
-
-  <div id="setupModal" class="modal" role="dialog" aria-modal="true" aria-labelledby="setupModalTitle">
-    <div class="modal-card">
-      <div class="modal-head"><h3 id="setupModalTitle">Owner setup guide</h3><button class="btn btn-sm" onclick="closeSetupModal()" aria-label="Close">✕</button></div>
-      <div class="modal-body">
-        <div id="setupStatus"></div>
-        <div id="setupBody"></div>
-        <div class="row mt12"><button class="btn btn-primary" onclick="closeSetupModal()">Done</button><button class="btn" onclick="openSetupModal()">↻ Refresh status</button></div>
-      </div>
     </div>
   </div>
 

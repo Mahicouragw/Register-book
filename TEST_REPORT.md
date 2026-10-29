@@ -304,8 +304,9 @@ Sign in as **Account A** on device 1 and **Account B** on device 2.
 
 ### If something does not work
 - Note the **exact screen**, the **exact words** on it, and **Android or iPhone**.
-- Check **Settings → Setup guide & connection check** first — it tests the link to
-  Supabase and names what is missing.
+- The app is already connected to Supabase, so there is no set-up guide any more.
+  If you ever need a raw connection report, open the browser console and run
+  `runDiagnostics()`.
 
 ---
 
