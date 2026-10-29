@@ -35,8 +35,12 @@
     return isIos() && /Safari/.test(ua) && !/CriOS|FxiOS|EdgiOS|QQ|Line|Instagram|FBAN|FBAV|Twitter/.test(ua);
   }
   function isStandalone() {
-    return window.matchMedia("(display-mode: standalone)").matches
-      || window.navigator.standalone === true;
+    // matchMedia is missing in some embedded browsers and in test runners, and
+    // a crash here would take the whole Settings screen down with it.
+    try {
+      if (window.matchMedia && window.matchMedia("(display-mode: standalone)").matches) return true;
+    } catch (e) { /* fall through */ }
+    return window.navigator.standalone === true;
   }
   function iosBlocked() {
     return isIosSafari() && !isStandalone();
@@ -258,9 +262,111 @@
     return { ok: true, delivered: res.delivered, message: "Sent to " + res.delivered + " device(s)." };
   }
 
+  // ------------------------------------------------------------ install (PWA)
+  // This is the piece that makes push actually work across apps and networks.
+  //
+  // A push message is delivered to the SERVICE WORKER, not to a tab. Android
+  // only gives a web app that delivery path once it is INSTALLED (Chrome turns
+  // it into a WebAPK); a bookmarked tab silently stops receiving pushes once
+  // its tab is closed or backgrounded. iPhone Safari needs Share → Add to Home
+  // Screen (iOS 16.4+). So "install" is not a nicety here — it is the thing
+  // that turns notifications from "works while the app is open" into "works
+  // whenever the other person sends something".
+  let deferredPrompt = null;
+
+  function installPlatform() {
+    const ua = navigator.userAgent || "";
+    if (isIos()) return "ios";
+    if (/Android/.test(ua)) return "android";
+    return "desktop";
+  }
+
+  function isInstalled() {
+    return isStandalone() || window.navigator.standalone === true;
+  }
+
+  /** True when the browser is offering to install right now (Android/Chrome). */
+  function canPromptInstall() { return !!deferredPrompt; }
+
+  /** How to install by hand, in plain words, for the phone you are holding. */
+  function installHowTo() {
+    if (installPlatform() === "ios") {
+      return "Tap the Share button at the bottom of Safari (the square with an arrow), scroll down, choose “Add to Home Screen”, then tap Add. Afterwards, always open RegisterBook from the new icon on your home screen.";
+    }
+    if (installPlatform() === "android") {
+      return "Tap the three dots (⋮) in the top-right corner of Chrome, then choose “Install app” or “Add to Home screen”. Afterwards, always open RegisterBook from the new icon on your home screen.";
+    }
+    return "Open your browser menu and choose “Install RegisterBook” or “Add to Home screen”.";
+  }
+
+  function installStatus() {
+    const installed = isInstalled();
+    return {
+      installed,
+      canPrompt: !installed && canPromptInstall(),
+      platform: installPlatform(),
+      howTo: installHowTo(),
+      // Why this matters, in one sentence the owner can read on a phone.
+      why: installed
+        ? "Installed ✓ — RegisterBook can now wake up and show messages and calls even when it is closed and you are using a different app."
+        : "Until RegisterBook is installed on this home screen, messages and calls only arrive while the app is open. Install it and they arrive whenever someone sends them."
+    };
+  }
+
+  /** Shows the phone's own install sheet. Returns { ok, outcome }. */
+  async function promptInstall() {
+    const evt = deferredPrompt;
+    if (!evt) return { ok: false, reason: "no-prompt", message: installHowTo() };
+    deferredPrompt = null;
+    try {
+      if (evt.prompt) evt.prompt();
+      const choice = evt.userChoice ? await evt.userChoice : null;
+      if (choice && choice.outcome === "accepted") {
+        notifyInstallChange();
+        return { ok: true, outcome: "accepted" };
+      }
+      return { ok: false, reason: "dismissed", outcome: choice ? choice.outcome : "unknown" };
+    } catch (e) {
+      return { ok: false, reason: "error", message: String((e && e.message) || e) };
+    }
+  }
+
+  // Set by app.js so the Settings screen can redraw the moment the phone
+  // becomes installable (or gets installed).
+  function notifyInstallChange() {
+    if (window.RBPush && typeof window.RBPush.onInstallChange === "function") {
+      try { window.RBPush.onInstallChange(); } catch (e) { /* never break on a redraw */ }
+    }
+  }
+
+  // Chrome on Android: fires when the app is installable. We hold the event so
+  // our own big "Install" button can trigger the phone's install sheet later.
+  window.addEventListener("beforeinstallprompt", e => {
+    try { e.preventDefault(); } catch (err) {}
+    deferredPrompt = e;
+    notifyInstallChange();
+  });
+
+  // Fires on every platform once the app really is on the home screen.
+  window.addEventListener("appinstalled", () => {
+    deferredPrompt = null;
+    notifyInstallChange();
+  });
+
+  // iOS has no install event at all, so re-check when the display mode changes.
+  try {
+    const mq = window.matchMedia("(display-mode: standalone)");
+    const onChange = () => notifyInstallChange();
+    if (mq.addEventListener) mq.addEventListener("change", onChange);
+    else if (mq.addListener) mq.addListener(onChange);
+  } catch (e) { /* older browsers */ }
+
+
   window.RBPush = {
     supported, isIos, isIosSafari, isStandalone, iosBlocked, permission, statusText,
     registerSw, enable, disable, isSubscribed, currentSubscription,
-    ting, buzz, showInApp, sendTest
+    ting, buzz, showInApp, sendTest,
+    // install (what makes push work when the app is closed)
+    isInstalled, canPromptInstall, installPlatform, installHowTo, installStatus, promptInstall
   };
 })();

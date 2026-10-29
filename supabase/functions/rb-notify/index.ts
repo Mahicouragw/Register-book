@@ -317,7 +317,7 @@ async function buildPushRequest(subscription, payloadText, options) {
     return s.length > n ? s.slice(0, n - 1) + "…" : s;
   }
 
-  // The four notification types. `actions` are the buttons shown on the phone
+  // The notification types. `actions` are the buttons shown on the phone
   // banner (Android Chrome shows them; iOS shows a plain banner until you tap).
   function wording(ev) {
     const e = ev || {};
@@ -378,6 +378,26 @@ async function buildPushRequest(subscription, payloadText, options) {
           requireInteraction: true
         };
 
+      case "qbook":
+        return {
+          type: "qbook",
+          title: `${who} sent you a question book`,
+          body: e.text ? `“${clip(e.text)}” — tap to open and answer it.` : "Tap to open and answer it.",
+          actions: [{ action: "open", title: "Open" }],
+          tag: "rb-qbook",
+          renotify: true
+        };
+
+      case "qbook_done":
+        return {
+          type: "qbook_done",
+          title: `${who} returned a completed question book`,
+          body: e.text ? `“${clip(e.text)}” — tap to read the answers.` : "Tap to read the answers.",
+          actions: [{ action: "open", title: "Open" }],
+          tag: "rb-qbook-done",
+          renotify: true
+        };
+
       case "system":
       default:
         return {
@@ -400,6 +420,8 @@ async function buildPushRequest(subscription, payloadText, options) {
       case "friend":  return `#requests=1`;
       case "invite":  return `#join=${encodeURIComponent(ev.code || "")}`;
       case "call":    return `#call=${encodeURIComponent(ev.callId || "")}`;
+      case "qbook":       return `#qbook=${encodeURIComponent(ev.copyId || "")}`;
+      case "qbook_done":  return `#qbookdone=${encodeURIComponent(ev.copyId || "")}`;
       default:        return `#home=1`;
     }
   }
@@ -549,6 +571,31 @@ Deno.serve(async (req: Request) => {
     title = String(ev.caller || ev.sender || "");
     body = "";
     data = { callId: id, senderId: uid };
+  } else if (type === "qbook" || type === "qbook_done") {
+    const id = String(ev.copyId || "");
+    if (!id) return fail(400, "copyId is required.");
+    const { data: row, error } = await admin
+      .from("rb_qbook_copies")
+      .select("id, book_id, sender_id, recipient_id")
+      .eq("id", id)
+      .maybeSingle();
+    if (error) return fail(500, error.message);
+    if (!row) return fail(404, "That question book does not exist.");
+
+    if (type === "qbook") {
+      // the creator is telling the recipient a book is waiting for them
+      if (row.sender_id !== uid) return fail(403, "You can only announce a book you sent.");
+      recipientId = row.recipient_id;
+    } else {
+      // the recipient is telling the creator they have finished it
+      if (row.recipient_id !== uid) return fail(403, "You can only return a book that was sent to you.");
+      recipientId = row.sender_id;
+    }
+
+    const { data: bk } = await admin.from("rb_qbooks").select("title").eq("id", row.book_id).maybeSingle();
+    title = String(ev.sender || "");
+    body = (bk && bk.title) || "";
+    data = { copyId: id, senderId: uid, bookId: row.book_id };
   } else {
     return fail(400, "Unknown notification type: " + type);
   }
@@ -571,7 +618,8 @@ Deno.serve(async (req: Request) => {
     type,
     senderId: data.senderId,
     code: data.code,
-    callId: data.callId
+    callId: data.callId,
+    copyId: data.copyId
   });
 
   // ---- 4. write the inbox row --------------------------------------------
@@ -618,7 +666,8 @@ Deno.serve(async (req: Request) => {
         code: data.code || "",
         callId: data.callId || "",
         requestId: data.requestId || "",
-        inviteId: data.inviteId || ""
+        inviteId: data.inviteId || "",
+        copyId: data.copyId || ""
       });
 
       for (const sub of subs) {
@@ -631,7 +680,11 @@ Deno.serve(async (req: Request) => {
               publicKey: vapidPublic,
               privateKey: vapidPrivate,
               ttl: type === "call" ? 60 : 86400,
-              urgency: type === "call" ? "high" : "normal"
+              // "high" wakes the phone straight away; "normal" can be batched
+              // or delayed by Android's Doze. Messages, friend requests,
+              // invites and calls must arrive now, so only the quiet system
+              // notices are allowed to be "normal".
+              urgency: type === "system" ? "normal" : "high"
             }
           );
           const res = await fetch(request.endpoint, {

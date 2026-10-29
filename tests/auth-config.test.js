@@ -56,6 +56,18 @@ function boot({ googleEnabled, fetchFails = false, realConfig = true }) {
 }
 const tick = (ms = 0) => new Promise(r => setTimeout(r, ms));
 
+// runDiagnostics() is headless now that the owner set-up guide is gone. Support
+// can drop a #diagBox anywhere to read the report, which is what we do here.
+function supportBox(doc) {
+  let box = doc.getElementById("diagBox");
+  if (!box) {
+    box = doc.createElement("div");
+    box.id = "diagBox";
+    doc.body.appendChild(box);
+  }
+  return box;
+}
+
 test("config.js carries the real project URL and only a publishable key", () => {
   const src = fs.readFileSync(path.join(ROOT, "config.js"), "utf8");
   assert.match(src, /https:\/\/tmkpdvljhnlnvbckbnsc\.supabase\.co/);
@@ -131,7 +143,7 @@ test("demo still works with the real config present", async () => {
 test("connection check: reports the Google provider as OFF and the DB as locked", async () => {
   const { dom, w, doc } = boot({ googleEnabled: false });
   await w.__RB.boot();
-  w.openSetupModal();
+  supportBox(doc);
   await w.runDiagnostics();
   await tick(20);
   const report = doc.querySelector("#diagBox .diag").textContent;
@@ -146,7 +158,7 @@ test("connection check: reports the Google provider as OFF and the DB as locked"
 test("connection check: all green when the provider is ON", async () => {
   const { dom, w, doc } = boot({ googleEnabled: true });
   await w.__RB.boot();
-  w.openSetupModal();
+  supportBox(doc);
   await w.runDiagnostics();
   await tick(20);
   const report = doc.querySelector("#diagBox .diag").textContent;
@@ -159,7 +171,7 @@ test("connection check: all green when the provider is ON", async () => {
 test("connection check: unreachable network is reported clearly", async () => {
   const { dom, w, doc } = boot({ googleEnabled: false, fetchFails: true });
   await w.__RB.boot();
-  w.openSetupModal();
+  supportBox(doc);
   await w.runDiagnostics();
   await tick(20);
   const report = doc.querySelector("#diagBox .diag").textContent;

@@ -36,7 +36,6 @@
 
       <div class="demo-chips" id="gateDemoChips"></div>
 
-      <div class="gate-foot" style="margin-top:10px"><button class="btn btn-sm btn-ghost" onclick="openSetupModal()">🔧 Owner setup guide — Google &amp; Supabase steps</button></div>
       <div class="gate-foot">
         Staff have to buy many expensive paper books — Medical Checklist, Bill Book, Attendance, Stock… This app replaces them with shared digital books.<br>
         <span class="muted">Only the creator can edit. View-only access is enforced by Row Level Security in the database, not just by hiding buttons.</span>
@@ -72,6 +71,9 @@
         <div id="view-library" class="view" style="display:none">
           <div id="view-myRegisters"></div>
           <div id="view-shared"></div>
+          <div id="view-myQBooks"></div>
+          <div id="view-receivedQBooks"></div>
+          <div id="view-completedQBooks"></div>
         </div>
 
         <div id="view-community" class="view" style="display:none">
@@ -83,6 +85,9 @@
         <div id="view-inbox" class="view" style="display:none"></div>
         <div id="view-settings" class="view" style="display:none"></div>
         <div id="view-registerDetail" class="view" style="display:none"></div>
+        <div id="view-qbookEditor" class="view" style="display:none"></div>
+        <div id="view-qbookAnswer" class="view" style="display:none"></div>
+        <div id="view-qbookResults" class="view" style="display:none"></div>
       </div>
     </main>
 
@@ -220,17 +225,6 @@
     </div>
   </div>
 
-  <div id="setupModal" class="modal" role="dialog" aria-modal="true" aria-labelledby="setupModalTitle">
-    <div class="modal-card">
-      <div class="modal-head"><h3 id="setupModalTitle">Owner setup guide</h3><button class="btn btn-sm" onclick="closeSetupModal()" aria-label="Close">✕</button></div>
-      <div class="modal-body">
-        <div id="setupStatus"></div>
-        <div id="setupBody"></div>
-        <div class="row mt12"><button class="btn btn-primary" onclick="closeSetupModal()">Done</button><button class="btn" onclick="openSetupModal()">↻ Refresh status</button></div>
-      </div>
-    </div>
-  </div>
-
   <!-- delete account -->
   <div id="deleteModal" class="modal" role="dialog" aria-modal="true" aria-labelledby="deleteModalTitle">
     <div class="modal-card">
@@ -256,11 +250,96 @@
 
   <div id="toast" class="toast" aria-live="polite"></div>
 
+
+  <!-- ===== Questions Register Book modals ===== -->
+  <div id="qbCreateModal" class="modal" role="dialog" aria-modal="true" aria-labelledby="qbCreateTitle">
+    <div class="modal-card">
+      <div class="modal-head"><h3 id="qbCreateTitle">Create Questions Register Book</h3>
+        <button class="btn btn-sm" onclick="qbCloseCreate()" aria-label="Close">✕</button></div>
+      <div class="modal-body">
+        <div class="form-row">
+          <label for="qbCreateTitle2">Book title</label>
+          <input id="qbCreateTitle" placeholder="e.g. Ward Safety Quiz">
+        </div>
+        <div class="form-row">
+          <label for="qbCreatePages">How many pages to start with</label>
+          <input id="qbCreatePages" type="number" min="1" max="200" value="20" inputmode="numeric">
+        </div>
+        <div class="small muted">Pages are blank lined pages, numbered like a real register. You can add more pages any time.</div>
+        <div class="row mt12">
+          <button class="btn btn-primary" onclick="qbCreateBook()">Create book</button>
+          <button class="btn" onclick="qbCloseCreate()">Cancel</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div id="qbEditModal" class="modal" role="dialog" aria-modal="true" aria-labelledby="qbEditTitle">
+    <div class="modal-card">
+      <div class="modal-head"><h3 id="qbEditTitle">Edit question</h3>
+        <button class="btn btn-sm" onclick="qbCloseEdit()" aria-label="Close">✕</button></div>
+      <div class="modal-body">
+        <div class="form-row">
+          <label for="qbEditText">Question text</label>
+          <textarea id="qbEditText" rows="3"></textarea>
+        </div>
+        <div class="form-row">
+          <label class="qb-check"><input type="checkbox" id="qbEditChoices" onchange="qbToggleEdit()"> Offer choices A, B, C and D</label>
+        </div>
+        <div id="qbEditChoicesBox">
+          <div class="form-row"><label for="qbEditA">Option A</label><input id="qbEditA"></div>
+          <div class="form-row"><label for="qbEditB">Option B</label><input id="qbEditB"></div>
+          <div class="form-row"><label for="qbEditC">Option C</label><input id="qbEditC"></div>
+          <div class="form-row"><label for="qbEditD">Option D</label><input id="qbEditD"></div>
+        </div>
+        <div class="form-row">
+          <label class="qb-check"><input type="checkbox" id="qbEditWritten" onchange="qbToggleEdit()"> Also allow a written answer</label>
+        </div>
+        <div id="qbEditWrittenBox" style="display:none">
+          <div class="form-row"><label for="qbEditWrittenLabel">Label for the written answer</label><input id="qbEditWrittenLabel"></div>
+        </div>
+        <div class="row mt12">
+          <button class="btn btn-primary" onclick="qbSaveEdit()">Save changes</button>
+          <button class="btn" onclick="qbCloseEdit()">Cancel</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div id="qbSendModal" class="modal" role="dialog" aria-modal="true" aria-labelledby="qbSendTitle">
+    <div class="modal-card">
+      <div class="modal-head"><h3 id="qbSendTitle">Send question book</h3>
+        <button class="btn btn-sm" onclick="qbCloseSend()" aria-label="Close">✕</button></div>
+      <div class="modal-body">
+        <div class="small muted" style="margin-bottom:10px">Sending <b id="qbSendBookName"></b>.
+          The person receives their own copy to answer. Your original questions are never changed.</div>
+        <div class="form-row">
+          <label for="qbSendUser">Send to — name or user ID</label>
+          <input id="qbSendUser" placeholder="e.g. silverfish" autocomplete="off">
+        </div>
+        <div class="row mb8">
+          <button class="btn btn-sm" onclick="qbFindSendUser()">Find person</button>
+        </div>
+        <div id="qbSendResult" class="mb8"></div>
+        <div class="form-row">
+          <label for="qbSendNote">Message to include (optional)</label>
+          <input id="qbSendNote" placeholder="e.g. Please complete this by Friday.">
+        </div>
+        <div class="row mt12">
+          <button class="btn btn-primary" onclick="qbDoSend()">Send book</button>
+          <button class="btn" onclick="qbCloseSend()">Cancel</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <script src="vendor/supabase.js"></script>
   <script src="config.js"></script>
   <script src="notify.js"></script>
   <script src="auth.js"></script>
   <script src="store.js"></script>
+  <script src="qbooks.js"></script>
+  <script src="qbooks-ui.js"></script>
   <script src="push.js"></script>
   <script src="rtc.js"></script>
   <script src="app.js"></script>

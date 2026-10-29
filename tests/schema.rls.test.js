@@ -11,6 +11,10 @@ const { PGlite } = require("@electric-sql/pglite");
 
 const SQL = fs.readFileSync(path.join(__dirname, "..", "supabase", "migrations.sql"), "utf8");
 
+// Counted straight from the migration, so adding a table cannot silently
+// break these two assertions in different ways.
+const TABLE_COUNT = (SQL.match(/create table if not exists public\.rb_/g) || []).length;
+
 const GOLDFISH = "11111111-1111-4111-8111-111111111111";
 const SILVERFISH = "22222222-2222-4222-8222-222222222222";
 const PRIYA = "33333333-3333-4333-8333-333333333333";
@@ -66,13 +70,13 @@ async function superuser(db) {
   await db.exec(`reset role;`);
 }
 
-test("migration creates all 15 rb_ tables with Row Level Security enabled", async () => {
+test(`migration creates all ${TABLE_COUNT} rb_ tables with Row Level Security enabled`, async () => {
   const db = await makeDb();
   const { rows } = await db.query(`
     select tablename, rowsecurity from pg_tables
     where schemaname = 'public' and tablename like 'rb\\_%'
     order by tablename`);
-  assert.equal(rows.length, 15, "15 tables");
+  assert.equal(rows.length, TABLE_COUNT, `${TABLE_COUNT} tables`);
   for (const r of rows) assert.equal(r.rowsecurity, true, `${r.tablename} has RLS on`);
   await db.close();
 });
@@ -320,7 +324,7 @@ test("the migration is safe to run twice", async () => {
   const { rows } = await db.query(`select count(*)::int as n from pg_policies where schemaname = 'public' and tablename like 'rb\\_%'`);
   assert.ok(rows[0].n >= 20, `policies present after re-running (${rows[0].n})`);
   const t = await db.query(`select count(*)::int as n from pg_tables where schemaname='public' and tablename like 'rb\\_%'`);
-  assert.equal(t.rows[0].n, 15);
+  assert.equal(t.rows[0].n, TABLE_COUNT);
   await db.close();
 });
 

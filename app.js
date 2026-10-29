@@ -350,7 +350,10 @@
     community: ["Community", "People, friends, groups and chats"],
     settings: ["Settings", "Your account, notifications and legal"],
     inbox: ["Notifications", "Messages, friend requests, group invites and calls"],
-    registerDetail: ["Register book", "10 lines per page • unlimited pages"]
+    registerDetail: ["Register book", "10 lines per page • unlimited pages"],
+    qbookEditor: ["Question book", "Write your questions • add pages any time"],
+    qbookAnswer: ["Answer book", "Answer on the lined pages • save and continue later"],
+    qbookResults: ["Completed book", "Every original question with the answer given"]
   };
   function renderTopbar() {
     const t = TITLES[state.view] || TITLES.home;
@@ -368,6 +371,9 @@
     }
     if (state.view === "inbox") {
       html += `<button class="btn btn-sm" onclick="markAllNotificationsRead()">Mark all read</button>`;
+    }
+    if (state.view === "qbookEditor" || state.view === "qbookAnswer" || state.view === "qbookResults") {
+      html += `<button class="btn btn-sm" onclick="setView('library')">← Back to library</button>`;
     }
     if (state.view === "registerDetail") {
       html += `<button class="btn btn-sm" onclick="backToLibrary()">← Back to books</button>`;
@@ -388,6 +394,7 @@
   // Which tab is "current" when a sub-screen (inbox, a register, a chat) is open.
   function tabForView(name) {
     if (name === "registerDetail") return "library";
+    if (name === "qbookEditor" || name === "qbookAnswer" || name === "qbookResults") return "library";
     if (name === "inbox") return "home";
     return name;
   }
@@ -448,7 +455,8 @@
 
   // ---------------------------------------------------------------- notification rows
   function notifIcon(t) {
-    return t === "call" ? "📞" : t === "friend" ? "🧑‍🤝‍🧑" : t === "invite" ? "👥" : t === "system" ? "🔔" : "💬";
+    return t === "call" ? "📞" : t === "friend" ? "🧑‍🤝‍🧑" : t === "invite" ? "👥"
+      : t === "qbook" ? "❓" : t === "qbook_done" ? "✅" : t === "system" ? "🔔" : "💬";
   }
   function notifActionsHtml(n) {
     const d = n.data || {};
@@ -942,6 +950,15 @@
       </div>`;
   }
 
+  // The question-book screens live in qbooks-ui.js. They are optional, so the
+  // rest of the app keeps working even if that file failed to load.
+  function renderQuestionBooks() {
+    if (window.RBQBooksUI && window.RBQBooksUI.render) window.RBQBooksUI.render();
+  }
+  function refreshQuestionBookScreens() {
+    if (window.RBQBooksUI && window.RBQBooksUI.refresh) window.RBQBooksUI.refresh();
+  }
+
   function renderAll() {
     if (!S.me) return;
     renderHeader();
@@ -955,6 +972,8 @@
     renderSettings();
     renderRegisterDetail();
     if (state.view === "registerDetail" && !regById(state.reg.id)) state.view = "home";
+    renderQuestionBooks();
+    refreshQuestionBookScreens();
     renderTopbar();
     showView();
   }
@@ -1013,6 +1032,16 @@
     if (n.type === "friend") { setView("community"); renderAll(); return; }
     if (n.type === "invite" && d.code) { showJoinInvite(d.code); return; }
     if (n.type === "call") { setView("community"); renderAll(); return; }
+    if (n.type === "qbook" && d.copyId) {
+      if (window.qbOpenAnswer) window.qbOpenAnswer(d.copyId);
+      else setView("library");
+      renderAll(); return;
+    }
+    if (n.type === "qbook_done" && d.copyId) {
+      if (window.qbOpenResults) window.qbOpenResults(d.copyId);
+      else setView("library");
+      renderAll(); return;
+    }
     setView("home");
     renderAll();
   }
@@ -1092,9 +1121,7 @@
           <div class="row">
             <a class="btn btn-sm" href="terms.html" target="_blank" rel="noopener">📄 Terms &amp; Conditions</a>
             <a class="btn btn-sm" href="privacy.html" target="_blank" rel="noopener">🔒 Privacy Policy</a>
-            <button class="btn btn-sm btn-primary" onclick="openSetupModal()">🔧 Setup guide &amp; connection check</button>
           </div>
-          <div class="small muted mt8">The setup guide tests this phone's link to Supabase and tells you exactly what is missing.</div>
         </div>
       </div>
 
@@ -1134,7 +1161,15 @@
     renderNotificationSettings();
   }
 
+  // The last message shown under the notification buttons. Kept outside the DOM
+  // because renderNotificationSettings() rebuilds that whole block, which would
+  // otherwise wipe the message the instant it appears.
+  let notifResultText = "";
+
   function renderNotificationSettings() {
+    // Keep the install card in sync with the browser: Chrome only offers to
+    // install at certain moments, and iOS never does.
+    if (window.RBPush) window.RBPush.onInstallChange = renderNotificationSettings;
     const box = $("#notifBody");
     if (!box) return;
     const P = window.RBPush;
@@ -1144,7 +1179,21 @@
       badge.textContent = st.state === "granted" ? "ON" : st.state === "denied" ? "BLOCKED" : "OFF";
       badge.className = "badge " + (st.state === "granted" ? "badge-green" : st.state === "denied" ? "badge-red" : "badge-gray");
     }
+    const inst = P && P.installStatus ? P.installStatus() : { installed: true, canPrompt: false, platform: "unknown", howTo: "", why: "" };
+    const installCard = inst.installed ? "" : `
+      <div class="notif-state install">
+        <div class="strong">📲 Install RegisterBook on this phone</div>
+        <div class="small muted mt8">${esc(inst.why)}</div>
+        <div class="row mt12">
+          ${inst.canPrompt
+          ? `<button class="btn btn-primary" onclick="installRegisterBook()" aria-label="Install RegisterBook on this phone's home screen">Install RegisterBook</button>`
+          : ""}
+        </div>
+        ${inst.howTo ? `<div class="small mt8 how-to"><b>How:</b> ${esc(inst.howTo)}</div>` : ""}
+      </div>`;
+
     box.innerHTML = `
+      ${installCard}
       <div class="notif-state ${esc(st.state)}">
         <div class="strong">${esc(st.title)}</div>
         <div class="small muted mt8">${esc(st.body)}</div>
@@ -1155,7 +1204,7 @@
         ${st.state === "granted" ? `<button class="btn" onclick="switchNotifications(false)">Switch notifications OFF</button>` : ""}
         <button class="btn" onclick="sendTestNotification()">Send test notification</button>
       </div>
-      <div id="notifResult" class="small mt8" aria-live="polite"></div>
+      <div id="notifResult" class="small mt8" aria-live="polite">${esc(notifResultText)}</div>
       <div class="small muted mt12 limits">
         <b>Honest limits.</b> Android Chrome delivers push from a normal tab, and better once you
         “Add to Home Screen”. <b>iPhone Safari only delivers web push after Share → Add to Home Screen</b>
@@ -1164,8 +1213,33 @@
       </div>`;
   }
 
+  // Installing is what turns "notifications work while the app is open" into
+  // "notifications work whenever someone sends one". Without an installed app
+  // Android has no service-worker delivery path at all.
+  async function installRegisterBook() {
+    const P = window.RBPush;
+    const set = setNotifResult;
+    if (!P || !P.promptInstall) { set("This browser cannot install apps."); return; }
+    const res = await P.promptInstall();
+    if (res.ok) {
+      set("Installed ✓ — open RegisterBook from your home screen from now on.");
+      toast("RegisterBook installed ✓");
+    } else if (res.reason === "dismissed") {
+      set("No problem — you can install it any time from this screen.");
+    } else {
+      set(res.message || "Your browser did not offer to install. Use the steps above instead.");
+    }
+    renderNotificationSettings();
+  }
+
+  function setNotifResult(t) {
+    notifResultText = t || "";
+    const b = $("#notifResult");
+    if (b) b.textContent = notifResultText;
+  }
+
   async function switchNotifications(on) {
-    const set = t => { const b = $("#notifResult"); if (b) b.textContent = t; };
+    const set = setNotifResult;
     set("Working…");
     const P = window.RBPush;
     if (!P) { set("Push is not available in this browser."); return; }
@@ -1181,7 +1255,7 @@
   }
 
   async function sendTestNotification() {
-    const set = t => { const b = $("#notifResult"); if (b) b.textContent = t; };
+    const set = setNotifResult;
     set("Sending…");
     const res = await window.RBPush.sendTest();
     set(res.message || (res.ok ? "Sent ✓" : "Failed"));
@@ -2046,7 +2120,7 @@
     toast("Back to today's date ✓");
   }
 
-  // ---------------------------------------------------------------- owner setup guide
+  // ---------------------------------------------------------------- copy + diagnostics
   function copyText(text, label) {
     const done = () => toast((label || "Copied") + " ✓");
     try {
@@ -2070,81 +2144,12 @@
       done();
     } catch (e) { toast("Copy not allowed — select the text manually"); }
   }
-  function copyRow(label, value) {
-    return `<div class="copy-row">
-      <div class="copy-label">${esc(label)}</div>
-      <div class="copy-value">${esc(value)}</div>
-      <button class="btn btn-sm" onclick="copyText('${esc(value).replace(/'/g, "\\'")}', '${esc(label)}')">Copy</button>
-    </div>`;
-  }
-  function openSetupModal() {
-    const modal = $("#setupModal");
-    if (!modal) return;
-    const configured = !!(window.RBAuth && window.RBAuth.isConfigured());
-    const ref = configured && window.RBAuth.projectRef ? window.RBAuth.projectRef() : "<your-project-ref>";
-    const origin = window.location.origin;
-    const pageUrl = origin + window.location.pathname;
-    const siteUrl = (window.RB_CONFIG && window.RB_CONFIG.SITE_URL) || "https://mahicouragw.github.io/Register-book/";
-    const redirectUri = `https://${ref}.supabase.co/auth/v1/callback`;
-
-    const status = $("#setupStatus");
-    if (status) {
-      status.innerHTML = configured
-        ? `<div class="gate-hint ok"><span class="hint-title">Supabase is configured ✓</span>
-            Project ref <code>${esc(ref)}</code> · mode: <b>${S.isDemo() ? "demo (sign in with Google for cloud)" : "Google account"}</b>.
-            ${S.setupError ? `<div class="mt8" style="color:#991b1b">${esc(S.setupError)}</div>` : ""}</div>`
-        : `<div class="gate-hint err"><span class="hint-title">Supabase is not connected yet</span>
-            config.js still has REPLACE placeholders. Google sign-in shows a friendly message; demo mode works fully.</div>`;
-    }
-
-    const body = $("#setupBody");
-    if (!body) return;
-    body.innerHTML = `
-      <ol class="setup-steps">
-        <li>
-          <b>Project URL + publishable key → <code>config.js</code></b>
-          <div class="small muted">Open <a href="https://supabase.com/dashboard/project/${configured ? esc(ref) : "_/settings/api"}" target="_blank" rel="noopener">Project Settings → API</a>, copy the <b>Project URL</b> and the <b>publishable / anon</b> key (never the secret/service_role key).</div>
-          ${configured ? copyRow("Project URL", (window.RB_CONFIG && window.RB_CONFIG.SUPABASE_URL) || "") : `<div class="small">Values are not set yet.</div>`}
-        </li>
-        <li>
-          <b>Create the tables + security rules</b>
-          <div class="small muted">Open the <a href="https://supabase.com/dashboard/project/${configured ? esc(ref) : "_"}/sql/new" target="_blank" rel="noopener">SQL Editor</a>, paste all of <code>supabase/migrations.sql</code> from this repo and press <b>Run</b>. The last query should list <b>9 tables</b>, all with <code>rowsecurity = true</code>.</div>
-        </li>
-        <li>
-          <b>Supabase Auth → URL Configuration</b>
-          <div class="small muted">Page: <a href="https://supabase.com/dashboard/project/${configured ? esc(ref) : "_"}/auth/url-configuration" target="_blank" rel="noopener">Authentication → URL Configuration</a>. Set the Site URL, then add these to Redirect URLs:</div>
-          ${copyRow("Site URL", siteUrl)}
-          ${copyRow("Redirect URL (this page)", pageUrl)}
-          ${pageUrl !== siteUrl ? copyRow("Redirect URL (preview)", "Add this page + /** as well") : ""}
-        </li>
-        <li>
-          <b>Google Cloud Console → OAuth client (you paste the secret yourself)</b>
-          <div class="small muted">Open <a href="https://console.cloud.google.com/apis/credentials" target="_blank" rel="noopener">Google Cloud Console → Credentials</a> → <b>Create credentials → OAuth client ID → Web application</b>, then add:</div>
-          ${copyRow("Authorized JavaScript origin", origin)}
-          ${copyRow("Authorized redirect URI", redirectUri)}
-        </li>
-        <li>
-          <b>Supabase → Providers → Google → Enable</b>
-          <div class="small muted">Open <a href="https://supabase.com/dashboard/project/${configured ? esc(ref) : "_"}/auth/providers" target="_blank" rel="noopener">Authentication → Providers → Google</a>, turn it on and paste the <b>Client ID</b> and <b>Client Secret</b> there. Never send the secret in chat.</div>
-        </li>
-        <li>
-          <b>GitHub Pages</b>
-          <div class="small muted">After merging, open <a href="https://github.com/Mahicouragw/Register-book/settings/pages" target="_blank" rel="noopener">Settings → Pages</a> → <b>Deploy from a branch</b> → <code>main</code> → <code>/ (root)</code> → Save. The site is then at <a href="${esc(siteUrl)}" target="_blank" rel="noopener">${esc(siteUrl)}</a>.</div>
-        </li>
-      </ol>
-      <div class="card" style="border:1px solid var(--border);border-radius:10px;padding:12px;margin-top:6px">
-        <div class="strong">Connection check</div>
-        <div class="small muted">Tests this phone's link to Supabase and tells you exactly what is missing.</div>
-        <button class="btn btn-sm btn-primary mt8" onclick="runDiagnostics()">Run connection check</button>
-        <div id="diagBox" class="mt8"></div>
-      </div>
-      <div class="small muted mt12">Rule of thumb: the <b>publishable/anon</b> key is public and may live in <code>config.js</code>. The <b>service_role</b> key and the Google <b>Client Secret</b> must only ever be pasted into the Supabase dashboard.</div>`;
-    modal.classList.add("open");
-  }
+  // Headless on purpose: the owner-facing "set-up guide" is gone, but support
+  // can still call runDiagnostics() from the browser console. If a #diagBox
+  // exists it renders there; otherwise the report goes to the console.
   async function runDiagnostics() {
     const box = $("#diagBox");
-    if (!box) return;
-    box.innerHTML = '<div class="small muted">Checking…</div>';
+    if (box) box.innerHTML = '<div class="small muted">Checking…</div>';
     const cfg = window.RB_CONFIG || {};
     const lines = [];
     const ok = t => lines.push("PASS  " + t);
@@ -2200,14 +2205,15 @@
     const head = failed
       ? `<div class="gate-hint err" style="margin:0 0 8px"><b>${failed} thing${failed > 1 ? "s" : ""} need${failed > 1 ? "" : "s"} fixing</b> — see FAIL lines below.</div>`
       : `<div class="gate-hint ok" style="margin:0 0 8px"><b>Everything checks out ✓</b> — tap Continue with Google.</div>`;
-    box.innerHTML = head + `<pre class="diag">${esc(lines.join("\n"))}</pre>` +
-      `<button class="btn btn-sm mt8" onclick="copyText(document.querySelector('.diag').textContent, 'Check report')">Copy report</button>`;
+    const report = lines.join("\n");
+    if (box) {
+      box.innerHTML = head + `<pre class="diag">${esc(report)}</pre>` +
+        `<button class="btn btn-sm mt8" onclick="copyText(document.querySelector('.diag').textContent, 'Check report')">Copy report</button>`;
+    } else {
+      console.log(report);
+    }
+    return report;
   }
-  function closeSetupModal() {
-    const modal = $("#setupModal");
-    if (modal) modal.classList.remove("open");
-  }
-
   // ---------------------------------------------------------------- auth actions
   async function handleGoogleLogin() {
     setHint("Opening Google…", "ok");
@@ -2353,6 +2359,14 @@
       setTimeout(() => openInbox(), 200);
     } else if (params.has("new")) {
       setTimeout(() => openCreateModal(), 300);
+    } else if (params.has("qbook")) {
+      // Someone sent me a question book — open it ready to answer.
+      const cid = params.get("qbook") || "";
+      setTimeout(() => { if (window.qbOpenAnswer) window.qbOpenAnswer(cid); else setView("library"); }, 350);
+    } else if (params.has("qbookdone")) {
+      // A completed book came back to me — open it and read the answers.
+      const cid = params.get("qbookdone") || "";
+      setTimeout(() => { if (window.qbOpenResults) window.qbOpenResults(cid); else setView("library"); }, 350);
     }
 
     const action = params.get("rbaction") || "";
@@ -2516,12 +2530,14 @@
     sendInvite, makeInviteLink, copyInviteLink, showJoinInvite, closeJoinModal, joinGroup, declineGroupInvite,
     answerCall, declineCall,
     openDeleteModal, closeDeleteModal, downloadMyBooks, confirmDeleteAccount,
-    switchNotifications, sendTestNotification, renderNotificationSettings,
+    switchNotifications, sendTestNotification, renderNotificationSettings, installRegisterBook,
     toggleLineDate, useTodayForLine,
     handleGoogleLogin, handleSignOut, enterDemo, demoStory,
     handleFriend: respondFriend,
     toast, toggleSidebar, manualRefresh,
-    openSetupModal, closeSetupModal, copyText, runDiagnostics
+    // shared helpers, used by qbooks-ui.js
+    esc, fmtDay, profileOf, renderAll, renderTopbar, renderQuestionBooks,
+    copyText, runDiagnostics
   });
 
   // used by push.js to make the in-app banner open the right notification
