@@ -18,11 +18,35 @@ window.RB_CONFIG = {
   // Where the app lives (used in the setup instructions shown in the app)
   SITE_URL: "https://mahicouragw.github.io/Register-book/",
 
+  // ------------------------------------------------------------ Web Push
+  // The PUBLIC half of the VAPID key pair. It is meant to be published: the
+  // browser uses it to create a push subscription.
+  //
+  // The matching PRIVATE key lives only as a Supabase secret called
+  //   RB_VAPID_PRIVATE_KEY
+  // inside the rb-notify Edge Function. It is not in this repo and must never
+  // be pasted into Git or into chat.
+  VAPID_PUBLIC_KEY: "BAHRWF_YRQ3C1JM5BuF3xgK_wsVjckEIaIBAVvbVVf4buvT64ESvwQDtlk88yQ70JB6-UzKtfE8V5PPJcr3UQAc",
+
+  // Web Push needs a mailto/https contact address for the VAPID claim.
+  VAPID_SUBJECT: "mailto:numbersareplaying@gmail.com",
+
+  // Names of the Edge Functions (they live in supabase/functions/).
+  EDGE_NOTIFY: "rb-notify",
+  EDGE_DELETE_ACCOUNT: "rb-delete-account",
+
   // True only when both public values are filled in
   isConfigured() {
     const url = String(this.SUPABASE_URL || "");
     const key = String(this.SUPABASE_ANON_KEY || "");
     return !!url && !!key && !/REPLACE/i.test(url) && !/REPLACE/i.test(key);
+  },
+
+  // The rb-notify Edge Function URL, or "" when the project is not set up.
+  edgeUrl(name) {
+    if (!this.isConfigured()) return "";
+    const base = String(this.SUPABASE_URL).replace(/\/+$/, "");
+    return `${base}/functions/v1/${name || this.EDGE_NOTIFY}`;
   },
 
   // Project ref parsed from the URL (used to show exact dashboard links)
