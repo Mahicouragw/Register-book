@@ -455,7 +455,8 @@
 
   // ---------------------------------------------------------------- notification rows
   function notifIcon(t) {
-    return t === "call" ? "📞" : t === "friend" ? "🧑‍🤝‍🧑" : t === "invite" ? "👥" : t === "system" ? "🔔" : "💬";
+    return t === "call" ? "📞" : t === "friend" ? "🧑‍🤝‍🧑" : t === "invite" ? "👥"
+      : t === "qbook" ? "❓" : t === "qbook_done" ? "✅" : t === "system" ? "🔔" : "💬";
   }
   function notifActionsHtml(n) {
     const d = n.data || {};
@@ -1031,6 +1032,16 @@
     if (n.type === "friend") { setView("community"); renderAll(); return; }
     if (n.type === "invite" && d.code) { showJoinInvite(d.code); return; }
     if (n.type === "call") { setView("community"); renderAll(); return; }
+    if (n.type === "qbook" && d.copyId) {
+      if (window.qbOpenAnswer) window.qbOpenAnswer(d.copyId);
+      else setView("library");
+      renderAll(); return;
+    }
+    if (n.type === "qbook_done" && d.copyId) {
+      if (window.qbOpenResults) window.qbOpenResults(d.copyId);
+      else setView("library");
+      renderAll(); return;
+    }
     setView("home");
     renderAll();
   }
@@ -2348,6 +2359,14 @@
       setTimeout(() => openInbox(), 200);
     } else if (params.has("new")) {
       setTimeout(() => openCreateModal(), 300);
+    } else if (params.has("qbook")) {
+      // Someone sent me a question book — open it ready to answer.
+      const cid = params.get("qbook") || "";
+      setTimeout(() => { if (window.qbOpenAnswer) window.qbOpenAnswer(cid); else setView("library"); }, 350);
+    } else if (params.has("qbookdone")) {
+      // A completed book came back to me — open it and read the answers.
+      const cid = params.get("qbookdone") || "";
+      setTimeout(() => { if (window.qbOpenResults) window.qbOpenResults(cid); else setView("library"); }, 350);
     }
 
     const action = params.get("rbaction") || "";

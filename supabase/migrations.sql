@@ -1078,6 +1078,107 @@ begin
   end if;
 end$$;
 
+-- ============================================================================
+-- PART 4D — hardening the question books (found by re-reading the policies)
+--   a) the notification table accepts the two new question-book types
+--   b) a recipient must be a real registered person
+--   c) a copy can never be re-pointed to another book or person
+--   d) status changes follow one fixed path, and only the right person moves them
+--   e) answers are locked once the book is submitted
+-- ============================================================================
+
+-- a) the notification type list grew
+alter table public.rb_notifications drop constraint if exists rb_notifications_type_check;
+alter table public.rb_notifications add constraint rb_notifications_type_check
+  check (type in ('message','friend','invite','call','system','qbook','qbook_done'));
+
+-- helpers
+create or replace function public.rb_profile_exists(uid uuid)
+returns boolean
+language sql stable security definer set search_path = public
+as $$
+  select exists (select 1 from public.rb_profiles where id = uid);
+$$;
+
+create or replace function public.rb_qcopy_is_open(cid text)
+returns boolean
+language sql stable security definer set search_path = public
+as $$
+  select exists (
+    select 1 from public.rb_qbook_copies c
+    where c.id = cid and c.status in ('sent','received','in_progress')
+  );
+$$;
+
+-- b) + the insert rule: only the owner, only to a real person, only as "sent"
+drop policy if exists rb_qbook_copies_insert on public.rb_qbook_copies;
+create policy rb_qbook_copies_insert on public.rb_qbook_copies
+  for insert to authenticated with check (
+    sender_id = auth.uid()
+    and sender_id <> recipient_id
+    and public.rb_qbook_is_owner(book_id)
+    and public.rb_profile_exists(recipient_id)
+    and status = 'sent'
+  );
+
+-- c) + d) the guard that runs on every update of a copy
+create or replace function public.rb_qbook_copies_guard()
+returns trigger
+language plpgsql
+set search_path = public
+as $$
+begin
+  if new.book_id is distinct from old.book_id
+     or new.sender_id is distinct from old.sender_id
+     or new.recipient_id is distinct from old.recipient_id
+     or new.revision is distinct from old.revision then
+    raise exception 'A sent book cannot be re-pointed to another book, person or revision'
+      using errcode = '42501';
+  end if;
+
+  if new.status is distinct from old.status then
+    if not (
+         (old.status = 'sent'               and new.status in ('received','in_progress'))
+      or (old.status = 'received'           and new.status in ('in_progress','submitted'))
+      or (old.status = 'in_progress'        and new.status = 'submitted')
+      or (old.status = 'submitted'          and new.status in ('returned_to_creator','in_progress'))
+      or (old.status = 'returned_to_creator' and new.status = 'in_progress')
+    ) then
+      raise exception 'That status change is not allowed (% to %)', old.status, new.status
+        using errcode = '42501';
+    end if;
+
+    -- asking for a revision is the creator's job; everything else is the recipient's
+    if old.status in ('submitted','returned_to_creator') and new.status = 'in_progress' then
+      if auth.uid() is distinct from old.sender_id then
+        raise exception 'Only the creator can ask for a revision' using errcode = '42501';
+      end if;
+    else
+      if auth.uid() is distinct from old.recipient_id then
+        raise exception 'Only the person it was sent to can change its progress' using errcode = '42501';
+      end if;
+    end if;
+  end if;
+
+  return new;
+end;
+$$;
+
+drop trigger if exists rb_qbook_copies_guard on public.rb_qbook_copies;
+create trigger rb_qbook_copies_guard
+  before update on public.rb_qbook_copies
+  for each row execute function public.rb_qbook_copies_guard();
+
+-- e) answers can only be written while the copy is open
+drop policy if exists rb_qanswers_write on public.rb_qanswers;
+create policy rb_qanswers_write on public.rb_qanswers
+  for all to authenticated
+  using (public.rb_qcopy_is_recipient(copy_id) and public.rb_qcopy_is_open(copy_id))
+  with check (public.rb_qcopy_is_recipient(copy_id) and public.rb_qcopy_is_open(copy_id));
+
+grant execute on function public.rb_profile_exists(uuid) to authenticated;
+grant execute on function public.rb_qcopy_is_open(text) to authenticated;
+
 -- ---------------------------------------------------------------- check
 -- Expect 21 rows and row_security = true for every one of them.
 select tablename, rowsecurity

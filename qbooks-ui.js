@@ -488,14 +488,28 @@
   }
 
   // ================================================================ actions
+  /**
+   * Wraps every question-book action.
+   *
+   * Three things the owner asked for, in one place:
+   *   • a visible "Saving…" while the write is on its way to the server,
+   *   • the real error message if the network or the database refuses,
+   *   • a plain confirmation when it worked.
+   * The book itself is never left half-changed: the database writes are
+   * single statements, and a failure simply leaves the old values in place.
+   */
   async function guard(fn, okMsg) {
+    const busy = !S.isDemo();
+    if (busy) toast("Saving…", 900);
     try {
       await fn();
       if (okMsg) toast(okMsg);
       renderAll();
       renderQuestionBooks();
     } catch (e) {
-      toast(e && e.message ? e.message : "Something went wrong.");
+      const msg = e && e.message ? e.message : "Something went wrong.";
+      toast(msg, 4200);
+      if (window.console) console.warn("[qbooks]", e);
     }
   }
 

@@ -1,6 +1,6 @@
 # RegisterBook — test report
 
-Date: 2026-10-29 · branch `arena/ced99a25-register-book`
+Date: 2026-10-29 · branch `arena/46e18387-register-book`
 
 Previous round: PR #3 was merged into `main` (merge commit `93459e5`). This round
 closes the two gaps found when the merged work was audited against the original
@@ -8,7 +8,7 @@ seven requirements.
 
 ---
 
-## 1. Automated tests — 79 / 79 pass
+## 1. Automated tests — 122 / 122 pass
 
 ```bash
 npm install
@@ -211,6 +211,8 @@ Wi-Fi and may fail across networks.
 | **Calls across different networks** | No TURN server exists yet | The owner must run or buy a TURN server and set `TURN_URLS` + `TURN_AUTH_SECRET` (README → *Calling*) |
 | **Add to Home Screen** / offline | Needs a real phone | The owner must test |
 | **That a notification arrives while the app is closed** | The highest-value test, and only a phone can prove it | Step 6 of the script below |
+| **Question book on a real phone** (send → answer → return, TalkBack) | Needs two real accounts and screen-reader testing | Section 4b of this report (B1–B7) |
+| **Question-book notification while the app is closed** | Needs an installed app on a real phone | Step B3 of section 4b |
 
 **Nothing above is claimed to work.** If account deletion cannot reach the Edge
 Function, the app says honestly: *“Recorded as a pending deletion request — a manager
@@ -310,9 +312,66 @@ Sign in as **Account A** on device 1 and **Account B** on device 2.
 
 ---
 
+## 4b. Question books and install — two-account phone script
+
+Use two real accounts on two phones (call them **Tiger** and **Silver**). Use the
+installed app (see Step 0 above). Each step says what you should see. If one step
+fails, write down the screen and the exact words, then stop.
+
+### B1 — Tiger writes a book
+1. Tiger → **Library** → **❓ Create Questions Register Book**. Type `Ward Safety Quiz`,
+   **Create book**. ✅ A lined page opens, numbered *Page 1 of 20*.
+2. Tap **Add question**. Type a question, tick **Offer choices A, B, C and D**, fill A–D,
+   tick **Also allow a written answer**, **Add question**. ✅ The question appears with A–D.
+3. Tap **Add page**. ✅ *Page 2 of 21*.
+
+### B2 — Tiger sends it to Silver
+4. Tap **Send to…**. Type `silverfish` (or Silver's user ID). **Find person**. ✅ *Found*.
+5. **Send book**. ✅ *Sent to Silver*.
+
+### B3 — Silver receives it (while Silver's app is CLOSED)
+6. Close Silver's app completely. Tiger sends a second book, or shares a register.
+7. ✅ **Expected:** a notification on Silver's phone: *Tiger sent you a question book*
+   with **Open**. Tap it. ✅ The book opens on the answer screen.
+   - If nothing arrives: check that the app is **installed** (Settings → *Install RegisterBook*).
+     Push is not a yes/no switch: install first, then switch notifications on.
+
+### B4 — Silver answers, leaves, and comes back
+8. Silver taps an option (A–D) and types in the written box. ✅ Each change says *Answer saved*.
+9. Silver closes the app completely and reopens it. ✅ The answers are still there.
+10. Silver tries to change Tiger's question text. ✅ There is no way to edit it.
+
+### B5 — Silver submits and sends it back
+11. **Submit answers** → confirm. ✅ Silver's answers become read-only.
+12. **Send completed book back** → confirm. ✅ *Book returned to its creator.*
+
+### B6 — Tiger reads the answers
+13. ✅ Tiger gets a notification: *Silver returned a completed question book*. Tap it.
+14. ✅ Tiger sees: every original question, all four options, Silver's chosen option
+    marked **Chosen**, Silver's written answer, Silver's name, the submission date,
+    and the status **Returned to creator**.
+15. Tiger taps **Ask for a revision**. ✅ Silver can open the book, change an answer, and
+    send it back again. Tiger's questions are unchanged.
+
+### B7 — Install and notification checks
+16. Settings → **Install RegisterBook on this phone**. On Android: the button opens the
+    phone's install sheet. On iPhone: follow the Share → Add to Home Screen steps.
+17. Settings → **Send test notification**. ✅ A banner appears within a few seconds
+    with the app closed.
+
+**What the automated tests prove about this feature** (not the same as a phone test):
+the book, pages, questions and options; the sending rules; the full round trip with
+answers surviving a reopen; that a recipient cannot change the original; that a
+double submission is refused; the wording of the notifications; the install card.
+
+**What only the phone test proves:** that the notification banner really appears with
+the app closed, and that the answer screen works with TalkBack / VoiceOver.
+
+---
+
 ## 5. Honest summary
 
-**Proven by code and tests (79 tests):** the interface, the writing fix, the Terms and
+**Proven by code and tests (122 tests):** the interface, the writing fix, the Terms and
 Privacy screens, the invite flow, the wording of every notification, the Web Push
 encryption (checked against the reference implementation in both directions), and the
 TURN credential maths (checked against coturn's own HMAC-SHA1).
@@ -320,6 +379,15 @@ TURN credential maths (checked against coturn's own HMAC-SHA1).
 **Proven against the live database:** the migration really ran, all 15 tables have RLS
 on, and 49 security checks pass — 33 as owner / shared reader / outsider, plus 16
 proving that joining a group really does grant its registers.
+
+**Question books (new):** the whole Tiger → Silver → Tiger round trip is proven by 122
+automated tests in a browser-like run, and the security rules are proven against a real
+PostgreSQL engine (19 tests) and against the **live** database (44 checks, each one inside a
+transaction that is discarded afterwards). One live probe (P42) was first run in the wrong
+order, so its result showed a no-op as "allowed"; it was re-run on a clean sequence (C1, C2)
+and behaves as required. The live database also found two real gaps that were fixed in
+migration `rb_part4d_question_books_hardening`: the notification table did not accept the new
+types, and a recipient could re-point a copy to another book (a read leak).
 
 **Not proven yet:** that a notification actually arrives on your phone, and that a call
 actually connects. The database and all three Edge Functions are live; what is missing

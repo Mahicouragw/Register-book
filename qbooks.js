@@ -347,12 +347,14 @@
       id, book_id: bookId, sender_id: S.me.id, recipient_id: recipientId,
       status: STATUS.SENT, revision, sender_note: row.senderNote, sent_at: row.sentAt
     }]);
-    // Let the recipient know, exactly like a message would.
+    // Let the recipient know. This goes through the same Edge Function as a
+    // message, so it arrives as a real push even when their app is closed.
     try {
       await S.notifyRemote({
-        type: "system",
+        type: "qbook",
         recipientId,
-        title: S.me.name + " sent you a question book",
+        sender: S.me.name,
+        copyId: id,
         text: b.title
       });
     } catch (e) { /* a failed push must never lose the book itself */ }
@@ -431,9 +433,10 @@
     try {
       const b = book(c.bookId);
       await S.notifyRemote({
-        type: "system",
+        type: "qbook_done",
         recipientId: c.senderId,
-        title: S.me.name + " returned a completed question book",
+        sender: S.me.name,
+        copyId: c.id,
         text: b ? b.title : ""
       });
     } catch (e) { /* never lose the return itself */ }
