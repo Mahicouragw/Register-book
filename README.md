@@ -77,27 +77,35 @@ tests/                       automated tests
 
 | Piece | Status |
 |---|---|
-| Four-tab app, writing fix, Terms, Privacy, Delete account | ✅ built on this branch |
-| Group invites by name and by link | ✅ built |
-| Push notifications (PWA + VAPID + Edge Function) | ✅ built and **deployed** — ⏳ delivery must be tested on a phone |
-| Real WebRTC audio + video calling | ✅ built — ⏳ must be tested on two phones |
-| `supabase/migrations.sql` extended to 15 tables | ✅ runs clean on PostgreSQL |
-| The new migration applied to the **live** project | ✅ **done** — 15 tables, all with RLS on |
-| RLS proven against the **live** database | ✅ **33 / 33 checks pass**, inside a discarded transaction |
+| **A.** Four-tab app, phone-one-hand usable, accessible | ✅ built and live |
+| **B.** Writing fix — no date box, date saved automatically | ✅ built and live |
+| **C.** Terms, Privacy, Delete my account (real deletion) | ✅ built and live |
+| **D.** Group invites by name and by link | ✅ built, live, and **fixed**: joining a group now also grants the registers already shared with it |
+| **E.** Push notifications (PWA + VAPID + Edge Function) | ✅ built and **deployed** — ⏳ delivery must be tested on a phone |
+| **F.** Real WebRTC audio + video calling | ✅ built; **relay plumbing added** — ⏳ must be tested on two phones |
+| **G.** Flutter-ready (table names stable, plan in README) | ✅ documented |
+| `supabase/migrations.sql` — 15 tables | ✅ runs clean on PostgreSQL |
+| Migration applied to the **live** project | ✅ **done** — 15 tables, all with RLS on |
+| RLS proven against the **live** database | ✅ **49 checks pass**, inside discarded transactions |
 | VAPID secrets set in Supabase | ✅ **done** |
-| The two Edge Functions deployed | ✅ **done** — both `ACTIVE` |
+| The three Edge Functions deployed | ✅ **done** — all `ACTIVE` |
 | GitHub Pages | ✅ `status: built`, branch `main`, folder `/` |
 
-**The only thing left is testing on real phones.** Push delivery and call
-connection cannot be proven from a computer — see `TEST_REPORT.md` for the
-two-account test script.
+### What still needs a human
+
+1. **Test on two phones.** Push delivery and call connection cannot be proven from a
+   computer. See `TEST_REPORT.md` for the two-account test script.
+2. **Add a TURN server** if calls fail across different networks. The app, the
+   `rb-turn-credentials` Edge Function and the secrets are all ready — only the
+   server itself is missing. See **Calling — honest limits**.
 
 ### What was applied to the live project
 
-Three migrations: `rb_part2a_new_tables_notifications_invites_calls`,
-`rb_part2b_group_invite_policies_and_helpers`, `rb_part2c_policies_grants_realtime`.
-They are safe to re-run. The full script `supabase/migrations.sql` stays the
-single source of truth and is safe to run on a fresh project.
+Four migrations: `rb_part2a_new_tables_notifications_invites_calls`,
+`rb_part2b_group_invite_policies_and_helpers`, `rb_part2c_policies_grants_realtime`,
+`rb_part3_accepting_an_invite_grants_group_registers`. They are safe to re-run.
+The full script `supabase/migrations.sql` stays the single source of truth and is
+safe to run on a fresh project.
 
 ---
 
@@ -195,6 +203,12 @@ The only place that can call Supabase's admin `deleteUser` — the browser must 
 hold the `service_role` key. It requires `{ "confirm": "DELETE" }`, keeps an audit
 row in `rb_account_deletions`, and reports `ok:false` with a reason if it fails.
 
+### `rb-turn-credentials`
+Hands a signed-in phone a TURN relay credential that expires after a few hours, so
+calls work across different networks. The long-lived relay secret stays in Supabase
+secrets. If no relay is configured it answers `configured: false` and the app falls
+back to STUN only with an honest message. See **Calling — honest limits** below.
+
 ### Secrets
 Supabase → **Edge Functions → Secrets** (or Project Settings → Edge Functions):
 
@@ -203,13 +217,16 @@ Supabase → **Edge Functions → Secrets** (or Project Settings → Edge Functi
 | `RB_VAPID_PRIVATE_KEY` | the private half of the VAPID pair — **server side only** |
 | `RB_VAPID_PUBLIC_KEY` | the same public key that is in `config.js` (optional, defaults are read from the function) |
 | `RB_VAPID_SUBJECT` | optional, e.g. `mailto:you@example.com` |
+| `TURN_URLS` | optional — needed for calls across different networks |
+| `TURN_AUTH_SECRET` | optional — the relay's shared secret, server side only |
+| `TURN_TTL_SECONDS` | optional, defaults to `21600` |
 
 `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` are provided by the platform — do not
 set them by hand.
 
 ### Rebuilding after a change
 ```bash
-npm run build:functions     # regenerates the two index.ts files
+npm run build:functions     # regenerates the three index.ts files
 ```
 
 ---
@@ -228,14 +245,68 @@ npm run build:functions     # regenerates the two index.ts files
 
 ## Calling — honest limits
 
-Calls use WebRTC. The two phones first try to talk **directly** (STUN). Many mobile
-networks and Wi-Fi routers block that, and then a **TURN relay** is required.
+Calls use real WebRTC: full-screen Answer / Decline, live timer, mic mute, camera off,
+and self-view plus remote video for video calls. It never says **“connected”** until
+the connection really is connected.
 
-- While a TURN server is not configured, a failed call says:
+### Why calls sometimes need a relay (TURN)
+
+The two phones first try to talk **directly** to each other (STUN). That works on the
+same Wi-Fi. But mobile carriers and most routers hide each phone behind NAT, and then
+the audio and video have to go through a server in the middle — a **TURN relay**.
+
+- **With** a relay: calls connect from anywhere, on Wi-Fi or mobile data.
+- **Without** a relay: calls work on the same Wi-Fi, and often fail across different
+  networks. When that happens the app says plainly:
   *“Your network needs a relay — TURN is not configured yet.”*
-- It never says “connected” until the connection really is connected.
-- To add TURN later, set `TURN_URLS`, `TURN_USERNAME` and `TURN_CREDENTIAL`.
-  (TURN credentials should be short-lived and minted server-side; that is future work.)
+
+The relay plumbing is already built. What is missing is the server itself.
+
+### Turning the relay on
+
+**1. Get a TURN server.** Either run [coturn](https://github.com/coturn/coturn) on a
+small VPS, or buy one from a hosted provider. It needs a public IP and these ports
+open: **3478** (UDP + TCP), **5349** (TLS), and **49152–65535** UDP for the media.
+
+A minimal coturn config:
+
+```ini
+listening-port=3478
+tls-listening-port=5349
+fingerprint
+lt-cred-mech
+use-auth-secret
+static-auth-secret=PASTE-A-LONG-RANDOM-STRING-HERE
+realm=turn.yourdomain.com
+total-quota=100
+no-multicast-peers
+```
+
+**2. Put the secret in Supabase, never in the code.**
+Supabase → **Edge Functions → Secrets**:
+
+| Secret | Example |
+|---|---|
+| `TURN_URLS` | `turn:turn.yourdomain.com:3478,turns:turn.yourdomain.com:5349` |
+| `TURN_AUTH_SECRET` | the same long random string as `static-auth-secret` |
+| `TURN_TTL_SECONDS` | optional, defaults to `21600` (6 hours) |
+
+**3. That is it.** The `rb-turn-credentials` Edge Function verifies the caller's
+sign-in and hands each phone a credential that **expires on its own** after the TTL
+(coturn's `static-auth-secret` scheme):
+
+```
+username   = "<unix time it expires>:<user id>"
+credential = base64( HMAC-SHA1( TURN_AUTH_SECRET, username ) )
+```
+
+So the long-lived secret never reaches the browser, and a leaked credential stops
+working by itself. If the secrets are not set, the function answers
+`{ configured: false }` and the app falls back to STUN only with the honest message.
+
+> **Advanced:** you can bypass the Edge Function by filling `TURN_URLS`,
+> `TURN_USERNAME` and `TURN_CREDENTIAL` in `config.js`. Do not do that unless you
+> have to — those values would be readable by anyone who opens the page.
 
 ---
 

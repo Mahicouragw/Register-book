@@ -323,3 +323,70 @@ test("the migration is safe to run twice", async () => {
   assert.equal(t.rows[0].n, 15);
   await db.close();
 });
+
+test("accepting a group invite also grants the registers already shared with that group", async () => {
+  const db = await makeDb();
+  await superuser(db);
+  await db.exec(`
+    insert into auth.users (id, email, raw_user_meta_data) values
+      ('${GOLDFISH}', 'goldfish@example.com', '{"full_name":"Goldfish"}'),
+      ('${SILVERFISH}', 'silver@example.com', '{"full_name":"Silverfish"}'),
+      ('${PRIYA}', 'priya@example.com', '{"full_name":"Priya"}');
+  `);
+
+  // Goldfish owns two books and a group; both books are shared with the group.
+  await as(db, GOLDFISH);
+  await db.query(`insert into public.rb_registers (id, owner_id, name, type) values
+                    ('reg1','${GOLDFISH}','Ward A','Stock Register'),
+                    ('reg2','${GOLDFISH}','Ward B','Stock Register')`);
+  await db.query(`insert into public.rb_entries (id, register_id, text, seq) values
+                    ('e1','reg1','Gloves',1), ('e2','reg2','Masks',1)`);
+  await db.query(`insert into public.rb_groups (id, name, created_by) values ('g1','Ward Staff','${GOLDFISH}')`);
+  await db.query(`insert into public.rb_group_members (group_id, user_id) values ('g1','${GOLDFISH}'), ('g1','${SILVERFISH}')`);
+  await db.query(`insert into public.rb_shares (id, register_id, shared_with_user_id, permission, shared_by, group_id)
+                  values ('s1','reg1','${SILVERFISH}','view','${GOLDFISH}','g1'),
+                         ('s2','reg2','${SILVERFISH}','view','${GOLDFISH}','g1')`);
+  await db.query(`insert into public.rb_group_invites (group_id, code, invited_user_id, created_by)
+                  values ('g1','JOINME22','${PRIYA}','${GOLDFISH}')`);
+
+  // Before accepting, Priya is outside and sees nothing.
+  await as(db, PRIYA);
+  let r = await db.query(`select count(*)::int as n from public.rb_registers`);
+  assert.equal(r.rows[0].n, 0, "before accepting, Priya sees no books");
+
+  // Accept the invite.
+  r = await db.query(`select public.rb_accept_group_invite('JOINME22') as gid`);
+  assert.equal(r.rows[0].gid, "g1", "accepting returns the group id");
+  r = await db.query(`select count(*)::int as n from public.rb_group_members
+                      where group_id = 'g1' and user_id = '${PRIYA}'`);
+  assert.equal(r.rows[0].n, 1, "Priya is now a member of the group");
+
+  // THE REQUIREMENT: the books already shared with that group are now hers to read.
+  r = await db.query(`select id from public.rb_registers order by id`);
+  assert.deepEqual(r.rows.map(x => x.id), ["reg1", "reg2"], "Priya now sees both group books");
+  r = await db.query(`select id from public.rb_entries order by id`);
+  assert.deepEqual(r.rows.map(x => x.id), ["e1", "e2"], "and can read both books' lines");
+
+  // ...but "shared" still means view-only.
+  await assert.rejects(
+    () => db.query(`insert into public.rb_entries (id, register_id, text, seq) values ('e9','reg1','x',9)`),
+    /row-level security/i, "a late joiner still cannot write"
+  );
+
+  // Accepting twice is refused.
+  await assert.rejects(
+    () => db.query(`select public.rb_accept_group_invite('JOINME22')`),
+    /already accepted/i, "the same invite cannot be accepted twice"
+  );
+
+  // No duplicate rows were created for people who were already members.
+  await superuser(db);
+  r = await db.query(`select count(*)::int as n from public.rb_shares
+                      where register_id = 'reg1' and shared_with_user_id = '${SILVERFISH}'`);
+  assert.equal(r.rows[0].n, 1, "existing members did not get duplicate shares");
+  r = await db.query(`select count(*)::int as n from public.rb_shares
+                      where register_id = 'reg1' and shared_with_user_id = '${PRIYA}'`);
+  assert.equal(r.rows[0].n, 1, "the new member got exactly one share row per book");
+
+  await db.close();
+});

@@ -558,6 +558,32 @@ begin
   values (inv.group_id, auth.uid())
   on conflict (group_id, user_id) do nothing;
 
+  -- Joining a group must also give you the registers that had ALREADY been
+  -- shared with that group. Group sharing is stored as one rb_shares row per
+  -- member (see shareWithGroup), so a late joiner needs those rows copied
+  -- across or they would join an empty group.
+  insert into public.rb_shares (
+    id, register_id, shared_with_user_id, shared_with_email,
+    permission, shared_by, group_id
+  )
+  select
+    'shr_' || replace(gen_random_uuid()::text, '-', ''),
+    s.register_id,
+    auth.uid(),
+    (select p.email from public.rb_profiles p where p.id = auth.uid()),
+    s.permission,
+    s.shared_by,
+    s.group_id
+  from public.rb_shares s
+  where s.group_id = inv.group_id
+    and s.shared_with_user_id is not null
+    and not exists (
+      select 1
+      from public.rb_shares x
+      where x.register_id = s.register_id
+        and x.shared_with_user_id = auth.uid()
+    );
+
   return inv.group_id;
 end;
 $$;

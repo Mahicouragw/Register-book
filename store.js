@@ -737,6 +737,17 @@
       if (!DB.groupMembers.some(m => m.groupId === inv.groupId && m.userId === me.id)) {
         DB.groupMembers.push({ groupId: inv.groupId, userId: me.id });
       }
+      // Joining a group must also give you the registers already shared with it.
+      DB.shares
+        .filter(s => s.groupId === inv.groupId && s.sharedWithUserId && s.sharedWithUserId !== me.id)
+        .forEach(s => {
+          if (DB.shares.some(x => x.registerId === s.registerId && x.sharedWithUserId === me.id)) return;
+          DB.shares.push({
+            id: uid("shr"), registerId: s.registerId, sharedWithUserId: me.id,
+            sharedWithEmail: me.email || "", permission: s.permission || "view",
+            sharedBy: s.sharedBy, groupId: s.groupId, createdAt: new Date().toISOString()
+          });
+        });
       persist();
       return inv.groupId;
     }
@@ -864,6 +875,68 @@
     }
   }
 
+  // ---- TURN relay credentials for calling -------------------------------
+  // Asks the rb-turn-credentials Edge Function for a short-lived credential.
+  // The long-lived TURN secret stays in Supabase secrets, never in the page.
+  // Returns { ok, configured, iceServers, username, credential, expiresAt }.
+  // Never throws: if it fails, the caller falls back to STUN only and says so.
+  let turnCache = null;
+  async function fetchTurnCredentials() {
+    // Reuse a cached credential until five minutes before it expires.
+    if (turnCache && turnCache.expiresAt && turnCache.expiresAt - 300 > Math.floor(Date.now() / 1000)) {
+      return turnCache;
+    }
+    const cfg = window.RB_CONFIG || {};
+    // A relay wired straight into config.js wins (some owners prefer it).
+    if (cfg.TURN_URLS && cfg.TURN_USERNAME && cfg.TURN_CREDENTIAL) {
+      const urls = Array.isArray(cfg.TURN_URLS) ? cfg.TURN_URLS : String(cfg.TURN_URLS).split(",").map(s => s.trim()).filter(Boolean);
+      turnCache = {
+        ok: true, configured: true, expiresAt: Math.floor(Date.now() / 1000) + 3600,
+        iceServers: [
+          { urls: ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302"] },
+          { urls, username: cfg.TURN_USERNAME, credential: cfg.TURN_CREDENTIAL }
+        ]
+      };
+      return turnCache;
+    }
+
+    const url = cfg.edgeUrl ? cfg.edgeUrl("rb-turn-credentials") : "";
+    if (!url || !supa || isDemo()) {
+      return { ok: false, configured: false, iceServers: null, reason: "not-configured" };
+    }
+    try {
+      const sess = await window.RBAuth.getSession();
+      if (!sess || !sess.access_token) return { ok: false, configured: false, iceServers: null, reason: "no-session" };
+      const res = await fetch(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          apikey: String(cfg.SUPABASE_ANON_KEY || ""),
+          Authorization: "Bearer " + sess.access_token
+        },
+        body: JSON.stringify({})
+      });
+      if (!res.ok) {
+        let msg = "HTTP " + res.status;
+        try { const j = await res.json(); if (j && j.error) msg = j.error; } catch (e) {}
+        return { ok: false, configured: false, iceServers: null, reason: msg };
+      }
+      const j = await res.json();
+      turnCache = {
+        ok: true,
+        configured: !!j.configured,
+        iceServers: j.iceServers || null,
+        username: j.username || null,
+        credential: j.credential || null,
+        expiresAt: j.expiresAt || 0,
+        message: j.message || ""
+      };
+      return turnCache;
+    } catch (e) {
+      return { ok: false, configured: false, iceServers: null, reason: (e && e.message) || "network" };
+    }
+  }
+
   // ---- delete my account ------------------------------------------------
   function accountSummary() {
     const myRegs = DB.registers.filter(r => r.ownerId === me.id);
@@ -969,7 +1042,7 @@
     invitePersonToGroup, createGroupInviteLink, acceptInvite, declineInvite, previewInvite,
     savePushSubscription, deletePushSubscription,
     startCall, updateCallStatus, activeCall, sendCallSignal, callSignals, fetchCallSignals,
-    notifyRemote,
+    notifyRemote, fetchTurnCredentials,
     accountSummary, exportMyBooks, requestAccountDeletion, deleteAccountNow
   };
 })();

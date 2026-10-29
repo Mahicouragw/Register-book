@@ -1,10 +1,14 @@
 # RegisterBook — test report
 
-Date: 2026-10-23 · branch `arena/beefc0cb-register-book` · PR #3 (open, **not merged**)
+Date: 2026-10-29 · branch `arena/ced99a25-register-book`
+
+Previous round: PR #3 was merged into `main` (merge commit `93459e5`). This round
+closes the two gaps found when the merged work was audited against the original
+seven requirements.
 
 ---
 
-## 1. Automated tests — 68 / 68 pass
+## 1. Automated tests — 79 / 79 pass
 
 ```bash
 npm install
@@ -27,6 +31,7 @@ npm test
 | `tests/ui-simple.test.js` | 14 | The four tabs, the writing fix, Settings, permission gating, the invite flow |
 | `tests/webpush-crypto.test.js` | 8 | Our dependency-free Web Push is byte-compatible with the `web-push` reference implementation, **in both directions** |
 | `tests/edge-functions.test.js` | 5 | The generated Edge Functions are self-contained, valid TypeScript, and never trust the request body for identity |
+| `tests/turn-credentials.test.js` | 10 | The TURN relay credentials match coturn's own HMAC-SHA1, expire on their own, and no relay secret is hard-coded anywhere |
 
 ### What the Web Push tests actually prove
 `supabase/functions/_shared/webpush.js` implements RFC 8291 (`aes128gcm`) and RFC 8292
@@ -146,12 +151,64 @@ into Supabase secrets and is not stored anywhere in the workspace or in Git.
 
 ---
 
+### 2f. Round two — the two gaps found by auditing the merged work
+
+#### Gap 1 (requirement D): joining a group did not grant its registers
+
+The requirement says *"Accepting adds to `rb_group_members` **and grants access to
+registers already shared with that group**."* Group sharing is stored as one
+`rb_shares` row per member, and `rb_accept_group_invite` only inserted the membership
+row — so a late joiner landed in a group whose books they could not see.
+
+Fixed in `rb_accept_group_invite` (and in the demo path in `store.js`) by copying the
+group's existing register shares across to the new member, skipping duplicates.
+
+Proven live, **16 / 16 PASS**, inside a discarded transaction:
+
+| # | Check | Result |
+|---:|---|---|
+| 1–6 | owner creates two books, writes lines, makes a group, adds members, shares both books with the group, invites a newcomer | ✅ |
+| 7–8 | before accepting, the newcomer sees **no** books and **no** lines | ✅ |
+| 9 | accepting (even with a lower-case code) returns the group id | ✅ |
+| 10 | the group now has three members | ✅ |
+| 11–12 | after accepting, the newcomer sees **both** books and reads **both** lines | ✅ |
+| 13 | the newcomer still cannot write — view-only is still view-only | ✅ **BLOCKED (42501)** |
+| 14 | accepting the same invite twice is refused | ✅ **BLOCKED (P0002)** |
+| 15 | existing members got **no** duplicate share rows | ✅ |
+| 16 | the new member got exactly one share row per book | ✅ |
+
+#### Gap 2 (requirement F): calls need a relay, and none was wired up
+
+The requirement says *"STUN first, TURN if configured"*, which was honoured — but the
+honest outcome was that calls fail across different networks, which is the normal
+phone case. The plumbing now exists:
+
+- New **shared module** `supabase/functions/_shared/turn.js` — coturn's
+  `static-auth-secret` scheme in pure WebCrypto.
+- New **Edge Function `rb-turn-credentials`** — deployed and `ACTIVE`. Verifies the
+  caller's JWT, then returns a credential that expires on its own:
+  `username = "<expiry>:<userId>"`, `credential = base64(HMAC-SHA1(secret, username))`.
+  With no secrets set it answers `configured: false` and the app keeps the honest
+  "your network needs a relay" message.
+- `store.js` fetches it (`fetchTurnCredentials()`, cached until 5 minutes before
+  expiry), and `rtc.js` awaits it before building the peer connection.
+- The long-lived secret lives **only** in Supabase secrets (`TURN_URLS`,
+  `TURN_AUTH_SECRET`). A test asserts no hard-coded relay secret exists in any file.
+- README explains how to run coturn and which ports to open.
+
+**What is still missing is the TURN server itself** — that is a real server with a
+public IP, which cannot be created from here. Until it exists, calls work on the same
+Wi-Fi and may fail across networks.
+
+---
+
 ## 3. What is still NOT verified — please read
 
 | Not verified | Why | What is needed |
 |---|---|---|
 | **Real push delivery** on a phone | Needs a real device that has subscribed | The owner must test with two accounts on two phones |
-| **Real audio/video calls** | Needs two real devices, and a TURN relay on many mobile networks | The owner must test; the app says plainly when a relay is missing |
+| **Real audio/video calls** | Needs two real devices | The owner must test; the app says plainly when a relay is missing |
+| **Calls across different networks** | No TURN server exists yet | The owner must run or buy a TURN server and set `TURN_URLS` + `TURN_AUTH_SECRET` (README → *Calling*) |
 | **Add to Home Screen** / offline | Needs a real phone | The owner must test |
 | **That a notification arrives while the app is closed** | The highest-value test, and only a phone can prove it | Step 6 of the script below |
 
@@ -227,8 +284,15 @@ Sign in as **Account A** on device 1 and **Account B** on device 2.
    ✅ **Expected:** you hear each other. The timer counts up.
 4. End and repeat with **🎥 Video** → you should see each other, and **Mic** /
    **Camera** buttons should mute and stop the picture.
-5. ❗ If it fails, the app says **“Your network needs a relay — TURN is not configured
-   yet.”** That is the truth: a TURN server is still needed for many mobile networks.
+5. Try it once on the **same Wi-Fi**, then once on **mobile data**. Same Wi-Fi should
+   connect without any extra server. Across different networks a relay is normally
+   required.
+6. ❗ If the cross-network call fails, the app says **“Your network needs a relay —
+   TURN is not configured yet.”** That is the truth. The app, the
+   `rb-turn-credentials` Edge Function and the secrets are all ready; the only thing
+   missing is a TURN server with a public IP. Follow **README → Calling — honest
+   limits** to add one, then set `TURN_URLS` and `TURN_AUTH_SECRET` in Supabase
+   **Edge Functions → Secrets** and try again.
 
 ### Step 8 — Delete my account (only on a throwaway account)
 1. **Settings** → **Delete my account**.
@@ -247,13 +311,16 @@ Sign in as **Account A** on device 1 and **Account B** on device 2.
 
 ## 5. Honest summary
 
-**Proven by code and tests:** the interface, the writing fix, the Terms and Privacy
-screens, the invite flow, the wording of every notification, and the Web Push
-encryption itself.
+**Proven by code and tests (79 tests):** the interface, the writing fix, the Terms and
+Privacy screens, the invite flow, the wording of every notification, the Web Push
+encryption (checked against the reference implementation in both directions), and the
+TURN credential maths (checked against coturn's own HMAC-SHA1).
 
 **Proven against the live database:** the migration really ran, all 15 tables have RLS
-on, and 33 security checks pass as owner, as shared reader and as an outsider.
+on, and 49 security checks pass — 33 as owner / shared reader / outsider, plus 16
+proving that joining a group really does grant its registers.
 
 **Not proven yet:** that a notification actually arrives on your phone, and that a call
-actually connects. The database and the Edge Functions are live now; what is missing is
-two real phones — and I will not say they work until you have seen them work.
+actually connects. The database and all three Edge Functions are live; what is missing
+is two real phones — and a TURN server for calls across different networks. I will not
+say they work until you have seen them work.

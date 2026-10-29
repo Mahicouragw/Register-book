@@ -34,6 +34,22 @@ window.RB_CONFIG = {
   // Names of the Edge Functions (they live in supabase/functions/).
   EDGE_NOTIFY: "rb-notify",
   EDGE_DELETE_ACCOUNT: "rb-delete-account",
+  EDGE_TURN: "rb-turn-credentials",
+
+  // ------------------------------------------------------------ Calling
+  // Calls between two phones usually need a TURN relay, because mobile
+  // networks and Wi-Fi routers hide phones behind NAT.
+  //
+  // The relay's secret must NOT be here: the rb-turn-credentials Edge Function
+  // keeps it in the Supabase secrets TURN_URLS / TURN_AUTH_SECRET and hands
+  // each phone a credential that expires in a few hours.
+  //
+  // If you ever want to point at one fixed relay without the Edge Function,
+  // you may set all three values below — but they would then be visible to
+  // anyone who opens the page, so the Edge Function is strongly preferred.
+  TURN_URLS: "",          // e.g. ["turn:turn.example.com:3478","turns:turn.example.com:5349"]
+  TURN_USERNAME: "",
+  TURN_CREDENTIAL: "",
 
   // True only when both public values are filled in
   isConfigured() {

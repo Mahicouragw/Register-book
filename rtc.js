@@ -35,14 +35,32 @@
     realtime: null,
     startedAt: 0,
     ringTimer: null,
-    failureTimer: null
+    failureTimer: null,
+    turn: null             // { configured, iceServers } from rb-turn-credentials
   };
 
   const H = {};               // handlers set by app.js
 
   function emit(name, a, b) { if (typeof H[name] === "function") { try { H[name](a, b); } catch (e) { console.warn(e); } } }
 
+  // The relay is fetched from the rb-turn-credentials Edge Function, so the
+  // long-lived TURN secret never appears in the page. Falls back to STUN only.
+  async function ensureTurn() {
+    if (state.turn) return state.turn;
+    if (S.isDemo()) { state.turn = { configured: false, iceServers: null }; return state.turn; }
+    try {
+      const t = await S.fetchTurnCredentials();
+      state.turn = (t && t.configured && t.iceServers)
+        ? { configured: true, iceServers: t.iceServers }
+        : { configured: false, iceServers: null, message: (t && t.message) || "" };
+    } catch (e) {
+      state.turn = { configured: false, iceServers: null };
+    }
+    return state.turn;
+  }
+
   function iceServers() {
+    if (state.turn && state.turn.iceServers) return state.turn.iceServers;
     const servers = DEFAULT_ICE.slice();
     const c = window.RB_CONFIG || {};
     if (c.TURN_URLS && c.TURN_USERNAME && c.TURN_CREDENTIAL) {
@@ -51,6 +69,7 @@
     return servers;
   }
   function hasTurn() {
+    if (state.turn) return !!state.turn.configured;
     const c = window.RB_CONFIG || {};
     return !!(c.TURN_URLS && c.TURN_USERNAME && c.TURN_CREDENTIAL);
   }
@@ -79,7 +98,8 @@
   }
 
   // ------------------------------------------------------------ peer connection
-  function makePeer() {
+  async function makePeer() {
+    await ensureTurn();
     const pc = new RTCPeerConnection({ iceServers: iceServers() });
 
     pc.onicecandidate = ev => {
@@ -227,7 +247,7 @@
     state.callId = row.id;
     state.startedAt = Date.now();
 
-    state.pc = makePeer();
+    state.pc = await makePeer();
     attachLocalTracks();
     await state.pc.setLocalDescription(await state.pc.createOffer({ offerToReceiveAudio: true, offerToReceiveVideo: state.kind === "video" }));
     await S.sendCallSignal(state.callId, "offer", state.pc.localDescription.toJSON ? state.pc.localDescription.toJSON() : state.pc.localDescription);
@@ -264,7 +284,7 @@
 
     state.localStream = await getLocalStream(state.kind);
     emit("localstream", state.localStream);
-    state.pc = makePeer();
+    state.pc = await makePeer();
     attachLocalTracks();
 
     await S.updateCallStatus(callId, "accepted");
@@ -319,6 +339,7 @@
     if (state.localStream) state.localStream.getAudioTracks().forEach(t => { t.enabled = !state.muted; });
     emit("muted", state.muted);
     return state.muted;
+    state.turn = null;
   }
   function toggleCamera() {
     state.cameraOff = !state.cameraOff;
