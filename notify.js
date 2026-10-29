@@ -59,7 +59,7 @@
       case "friend":
         return {
           type: "friend",
-          title: `${who} sent you a friend request`,
+          title: `${who} sent you a new friend request`,
           body: "Tap Accept to connect, or Decline.",
           actions: [
             { action: "accept", title: "Accept" },

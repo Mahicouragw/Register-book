@@ -25,7 +25,7 @@ test("notification wording matches the agreed sentences", () => {
   assert.deepEqual(msg.actions.map(a => a.title), ["Open", "Reply later"]);
 
   const fr = NT.wording({ type: "friend", sender: "Priya" });
-  assert.equal(fr.title, "Priya sent you a friend request");
+  assert.equal(fr.title, "Priya sent you a new friend request");
   assert.deepEqual(fr.actions.map(a => a.title), ["Accept", "Decline"]);
 
   const inv = NT.wording({ type: "invite", inviter: "Rahul", group: "Ward Staff" });
@@ -300,4 +300,38 @@ test("the six new tables all have RLS on and signed-out visitors get nothing", a
     await assert.rejects(() => db.query(`select * from public.${t}`), /permission denied/i, `${t} is closed to anon`);
   }
   await db.close();
+});
+
+test("the deployed rb-notify Edge Function carries the exact same wording as the browser", () => {
+  // rb-notify inlines notify.js at build time. If someone edits notify.js and
+  // forgets `npm run build:functions`, the push banner would say one thing and
+  // the in-app inbox another. This test makes that impossible to miss.
+  const built = fs.readFileSync(
+    path.join(__dirname, "..", "supabase", "functions", "rb-notify", "index.ts"), "utf8");
+
+  for (const phrase of [
+    "you have a new message",
+    "sent you a new friend request",
+    "You're invited to ",       // eslint-disable-line
+    "is calling (",
+    "Reply later",
+    "Accept", "Decline", "Join", "Answer", "Open"
+  ]) {
+    assert.ok(built.includes(phrase),
+      `rb-notify must contain the wording "${phrase}" — run: npm run build:functions`);
+  }
+
+  // and the deep links too
+  for (const frag of ["#chat=", "#requests=1", "#join=", "#call=", "#home=1"]) {
+    assert.ok(built.includes(frag), `rb-notify must contain the deep link ${frag}`);
+  }
+
+  // Rebuilding must be idempotent, otherwise the shipped file is stale.
+  const { execFileSync } = require("child_process");
+  const before = fs.readFileSync(
+    path.join(__dirname, "..", "supabase", "functions", "rb-notify", "index.ts"), "utf8");
+  execFileSync(process.execPath, [path.join(__dirname, "..", "tools", "build-functions.js")]);
+  const after = fs.readFileSync(
+    path.join(__dirname, "..", "supabase", "functions", "rb-notify", "index.ts"), "utf8");
+  assert.equal(after, before, "the built Edge Function was out of date — rebuild and commit it");
 });
