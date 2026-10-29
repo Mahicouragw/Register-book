@@ -1150,7 +1150,15 @@
     renderNotificationSettings();
   }
 
+  // The last message shown under the notification buttons. Kept outside the DOM
+  // because renderNotificationSettings() rebuilds that whole block, which would
+  // otherwise wipe the message the instant it appears.
+  let notifResultText = "";
+
   function renderNotificationSettings() {
+    // Keep the install card in sync with the browser: Chrome only offers to
+    // install at certain moments, and iOS never does.
+    if (window.RBPush) window.RBPush.onInstallChange = renderNotificationSettings;
     const box = $("#notifBody");
     if (!box) return;
     const P = window.RBPush;
@@ -1160,7 +1168,21 @@
       badge.textContent = st.state === "granted" ? "ON" : st.state === "denied" ? "BLOCKED" : "OFF";
       badge.className = "badge " + (st.state === "granted" ? "badge-green" : st.state === "denied" ? "badge-red" : "badge-gray");
     }
+    const inst = P && P.installStatus ? P.installStatus() : { installed: true, canPrompt: false, platform: "unknown", howTo: "", why: "" };
+    const installCard = inst.installed ? "" : `
+      <div class="notif-state install">
+        <div class="strong">📲 Install RegisterBook on this phone</div>
+        <div class="small muted mt8">${esc(inst.why)}</div>
+        <div class="row mt12">
+          ${inst.canPrompt
+          ? `<button class="btn btn-primary" onclick="installRegisterBook()" aria-label="Install RegisterBook on this phone's home screen">Install RegisterBook</button>`
+          : ""}
+        </div>
+        ${inst.howTo ? `<div class="small mt8 how-to"><b>How:</b> ${esc(inst.howTo)}</div>` : ""}
+      </div>`;
+
     box.innerHTML = `
+      ${installCard}
       <div class="notif-state ${esc(st.state)}">
         <div class="strong">${esc(st.title)}</div>
         <div class="small muted mt8">${esc(st.body)}</div>
@@ -1171,7 +1193,7 @@
         ${st.state === "granted" ? `<button class="btn" onclick="switchNotifications(false)">Switch notifications OFF</button>` : ""}
         <button class="btn" onclick="sendTestNotification()">Send test notification</button>
       </div>
-      <div id="notifResult" class="small mt8" aria-live="polite"></div>
+      <div id="notifResult" class="small mt8" aria-live="polite">${esc(notifResultText)}</div>
       <div class="small muted mt12 limits">
         <b>Honest limits.</b> Android Chrome delivers push from a normal tab, and better once you
         “Add to Home Screen”. <b>iPhone Safari only delivers web push after Share → Add to Home Screen</b>
@@ -1180,8 +1202,33 @@
       </div>`;
   }
 
+  // Installing is what turns "notifications work while the app is open" into
+  // "notifications work whenever someone sends one". Without an installed app
+  // Android has no service-worker delivery path at all.
+  async function installRegisterBook() {
+    const P = window.RBPush;
+    const set = setNotifResult;
+    if (!P || !P.promptInstall) { set("This browser cannot install apps."); return; }
+    const res = await P.promptInstall();
+    if (res.ok) {
+      set("Installed ✓ — open RegisterBook from your home screen from now on.");
+      toast("RegisterBook installed ✓");
+    } else if (res.reason === "dismissed") {
+      set("No problem — you can install it any time from this screen.");
+    } else {
+      set(res.message || "Your browser did not offer to install. Use the steps above instead.");
+    }
+    renderNotificationSettings();
+  }
+
+  function setNotifResult(t) {
+    notifResultText = t || "";
+    const b = $("#notifResult");
+    if (b) b.textContent = notifResultText;
+  }
+
   async function switchNotifications(on) {
-    const set = t => { const b = $("#notifResult"); if (b) b.textContent = t; };
+    const set = setNotifResult;
     set("Working…");
     const P = window.RBPush;
     if (!P) { set("Push is not available in this browser."); return; }
@@ -1197,7 +1244,7 @@
   }
 
   async function sendTestNotification() {
-    const set = t => { const b = $("#notifResult"); if (b) b.textContent = t; };
+    const set = setNotifResult;
     set("Sending…");
     const res = await window.RBPush.sendTest();
     set(res.message || (res.ok ? "Sent ✓" : "Failed"));
@@ -2464,7 +2511,7 @@
     sendInvite, makeInviteLink, copyInviteLink, showJoinInvite, closeJoinModal, joinGroup, declineGroupInvite,
     answerCall, declineCall,
     openDeleteModal, closeDeleteModal, downloadMyBooks, confirmDeleteAccount,
-    switchNotifications, sendTestNotification, renderNotificationSettings,
+    switchNotifications, sendTestNotification, renderNotificationSettings, installRegisterBook,
     toggleLineDate, useTodayForLine,
     handleGoogleLogin, handleSignOut, enterDemo, demoStory,
     handleFriend: respondFriend,

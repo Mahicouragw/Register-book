@@ -241,7 +241,11 @@ Deno.serve(async (req: Request) => {
               publicKey: vapidPublic,
               privateKey: vapidPrivate,
               ttl: type === "call" ? 60 : 86400,
-              urgency: type === "call" ? "high" : "normal"
+              // "high" wakes the phone straight away; "normal" can be batched
+              // or delayed by Android's Doze. Messages, friend requests,
+              // invites and calls must arrive now, so only the quiet system
+              // notices are allowed to be "normal".
+              urgency: type === "system" ? "normal" : "high"
             }
           );
           const res = await fetch(request.endpoint, {
