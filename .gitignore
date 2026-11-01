@@ -1,3 +1,13 @@
 node_modules/
 .DS_Store
 *.log
+
+# Gmail audio exporter (tools/gmail_audio_export.py) — generated / private
+audio/
+gmail/
+credentials.json
+client_secret*.json
+.token.json
+manifest.csv
+__pycache__/
+*.pyc
