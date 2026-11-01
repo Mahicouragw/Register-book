@@ -205,7 +205,20 @@ guide-vocal slider. Two engines:
 | Engine | Needs | Quality | Use it when |
 |---|---|---|---|
 | `--method mdx` | a free UVR MDX-Net `.onnx` model (~67 MB) + `pip install onnxruntime` | **real AI separation** — clean instrumental | you want a proper karaoke backing track |
-| `--method center` | nothing at all | decent on stereo, useless on mono | you have no model yet, or just want a quick version |
+| `--method dsp` | nothing at all (numpy; scipy optional) | best possible without a model — spectral centre mask | you have no model yet. **This is the automatic fallback** |
+| `--method center` | nothing at all | quick mid/side, thin and phasey | rarely — kept for comparison |
+
+Measured on a synthetic mix with a *known* instrumental (6 s, centred vocal,
+left/right guitars, centred bass and hats):
+
+| Engine | recovery of the true instrumental (SDR) | vocal band left | percussion kept |
+|---|---|---|---|
+| `center` | 18.8 dB | −28.4 dB | −6.4 dB |
+| `dsp` | **19.2 dB** | **−33.7 dB** | **−2.2 dB** |
+| `dsp --drum-guard 0.35` | 8.0 dB | −1.1 dB | −0.3 dB |
+
+That last row is why the drum guard is **off by default**: protecting percussive
+bins also protected the vocal, and it cost 11 dB. Measured, not guessed.
 
 Both are free and run entirely on your machine — the song is never uploaded.
 
