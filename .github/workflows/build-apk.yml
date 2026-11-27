@@ -81,34 +81,60 @@ jobs:
             echo "KEYSTORE_FILE=registerbook.jks" >> "$GITHUB_ENV"
             echo "KEYSTORE_ALIAS=registerbook" >> "$GITHUB_ENV"
             echo "STORE_PASS=$KEYSTORE_PASSWORD" >> "$GITHUB_ENV"
+            echo "USING_OWN_KEYSTORE=yes" >> "$GITHUB_ENV"
           else
-            echo "No keystore secret — generating the project's fixed signing key."
+            # The key itself is restored (or created) by the cache steps below.
+            echo "KEYSTORE_FILE=registerbook.jks" >> "$GITHUB_ENV"
+            echo "KEYSTORE_ALIAS=registerbook" >> "$GITHUB_ENV"
+            echo "STORE_PASS=registerbook" >> "$GITHUB_ENV"
+          fi
+
+      # Cache the generated key under a FIXED key name.
+      #
+      # Android refuses to install an update signed with a different key, so
+      # every build must reuse the same keystore. A hash of the file cannot be
+      # used (it does not exist on the first run, so the key would change and
+      # the cache would never hit). A fixed key means the first run seeds it
+      # and every later run restores exactly the same signing key.
+      # Skipped when the owner supplies a permanent keystore via secrets.
+      - name: Restore the project signing key
+        id: keycache
+        if: env.USING_OWN_KEYSTORE != 'yes'
+        uses: actions/cache@v4
+        with:
+          path: android/app/registerbook.jks
+          key: rb-signing-key-v1
+
+      - name: Make sure the signing key exists
+        if: env.USING_OWN_KEYSTORE != 'yes'
+        run: |
+          if [ ! -f android/app/registerbook.jks ]; then
+            echo "No cached key — creating the project's signing key."
             keytool -genkeypair -v \
               -keystore android/app/registerbook.jks \
               -alias registerbook \
               -keyalg RSA -keysize 2048 -validity 10000 \
               -storepass registerbook -keypass registerbook \
               -dname "CN=RegisterBook, OU=Community, O=RegisterBook, L=Hyderabad, S=Telangana, C=IN"
-            echo "KEYSTORE_FILE=registerbook.jks" >> "$GITHUB_ENV"
-            echo "KEYSTORE_ALIAS=registerbook" >> "$GITHUB_ENV"
-            echo "STORE_PASS=registerbook" >> "$GITHUB_ENV"
+            echo "KEYSTORE_CREATED=yes" >> "$GITHUB_ENV"
+          else
+            echo "Restored the existing signing key from cache."
           fi
 
-      - name: Cache the generated signing key
-        if: ${{ !secrets.KEYSTORE_BASE64 }}
-        uses: actions/cache@v4
-        with:
-          path: android/app/registerbook.jks
-          key: rb-keystore-${{ hashFiles('android/app/registerbook.jks') }}
-          restore-keys: rb-keystore-
-
-      - name: Configure signing in Gradle
+      # Patch the ONE existing android { } block instead of appending a second
+      # one, and give every build a strictly higher versionCode so Android
+      # always treats it as an update (a repeated versionCode can be refused
+      # with "App not installed").
+      - name: Configure signing and version
         run: |
-          cat >> android/app/build.gradle <<'GRADLE'
+          python3 - "${{ github.run_number }}" <<'PYEOF'
+          import re, sys, os
+          build_number = sys.argv[1]
+          path = "android/app/build.gradle"
+          src = open(path).read()
 
-          // ---- Release signing (added by the APK workflow) -----------------
-          android {
-              signingConfigs {
+          # 1) a release signingConfig, right after the android { line
+          signing = """    signingConfigs {
                   release {
                       storeFile file(System.getenv("KEYSTORE_FILE") ?: "registerbook.jks")
                       storePassword System.getenv("STORE_PASS") ?: ""
@@ -116,15 +142,20 @@ jobs:
                       keyPassword System.getenv("STORE_PASS") ?: ""
                   }
               }
-              buildTypes {
-                  release {
-                      signingConfig signingConfigs.release
-                      minifyEnabled false
-                      shrinkResources false
-                  }
-              }
-          }
-          GRADLE
+              defaultConfig {"""
+          src = src.replace("    defaultConfig {", signing, 1)
+
+          # 2) hook it into the existing release buildType
+          src = src.replace("        release {\n            minifyEnabled false",
+                            "        release {\n            signingConfig signingConfigs.release\n            minifyEnabled false", 1)
+
+          # 3) monotonic versionCode / readable versionName
+          src = re.sub(r"versionCode \d+", "versionCode " + build_number, src, count=1)
+          src = re.sub(r'versionName "[^"]*"', 'versionName "1.0.' + build_number + '"', src, count=1)
+
+          open(path, "w").write(src)
+          print(src[:1600])
+          PYEOF
 
       - name: Build signed release APK
         working-directory: android

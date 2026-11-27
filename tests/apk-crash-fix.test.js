@@ -180,3 +180,39 @@ test("a build WITH Firebase does attempt registration (once)", async () => {
   assert.equal(second.reason, "already-tried");
   dom.window.close();
 });
+
+// ------------------------------------------- 4. the workflow that ships it
+test("the APK workflow is valid YAML with the release+signing steps", () => {
+  const yaml = require("js-yaml");
+  const doc = yaml.load(read(".github/workflows/build-apk.yml"));
+  const steps = doc.jobs["build-apk"].steps;
+  const names = steps.map(s => s.name || s.uses).join(" | ");
+
+  assert.ok(names.includes("assembleRelease") || read(".github/workflows/build-apk.yml").includes("assembleRelease"),
+    "builds a release APK");
+  assert.equal(doc.permissions.contents, "write", "can create the Release");
+  assert.ok(names.includes("Publish as a GitHub Release"), "publishes the .apk for one-tap download");
+  assert.ok(names.includes("Configure signing and version"), "signs it and bumps versionCode");
+
+  // A step may not use secrets.* inside an `if:` — that invalidates the whole
+  // workflow and GitHub creates no jobs at all (this happened once).
+  for (const s of steps) {
+    if (typeof s.if === "string") {
+      assert.ok(!s.if.includes("secrets."), "no secrets.* in an if: expression -> " + s.name);
+    }
+  }
+});
+
+test("the APK workflow signs with a key that survives between builds", () => {
+  const wf = read(".github/workflows/build-apk.yml");
+  // A fixed cache key, not a hash of a file that does not exist yet.
+  assert.ok(wf.includes("rb-signing-key-v1"), "signing key cached under a fixed key");
+  assert.ok(!wf.includes("hashFiles('android/app/registerbook.jks')"), "not keyed by a missing file");
+  assert.ok(wf.includes("registerbook.jks"), "the keystore path is used");
+});
+
+test("the APK workflow raises versionCode so Android accepts the update", () => {
+  const wf = read(".github/workflows/build-apk.yml");
+  assert.ok(wf.includes("versionCode"), "versionCode is patched");
+  assert.ok(wf.includes("github.run_number"), "it uses the increasing run number");
+});
