@@ -14,14 +14,32 @@
 
   // ------------------------------------------------------------ Android app
   // Inside the APK (Capacitor), Google refuses OAuth in the built-in web
-  // view. So the login opens Chrome (a Custom Tab), the person signs in
-  // there, and Chrome hands control back to the app through the deep link
-  // com.registerbook.community://auth (see AndroidManifest + config.js).
-  // The app then exchanges the code for a session — the person lands back
-  // in RegisterBook already signed in, with their name and photo.
+  // view. So login runs in Chrome, and control comes back to the app:
+  //
+  //   app  --Browser.open-->  Chrome Custom Tab
+  //        Supabase /authorize -> accounts.google.com -> user picks account
+  //        Supabase /callback  -> 302 to auth-callback.html (our own page!)
+  //   auth-callback.html     -> 302 to com.registerbook.community://auth?code=...
+  //   Android starts MainActivity (singleTask) + drops the Custom Tab
+  //   app  --App 'appUrlOpen' / getLaunchUrl-->  exchangeCodeForSession
+  //
+  // WHY the intermediate page: Chrome Custom Tabs BLOCK an automatic
+  // (server 302 / JavaScript) jump straight from a web page to a custom
+  // scheme like com.registerbook.community://. That block is exactly what
+  // made the phone sit on "connecting" forever. auth-callback.html is a
+  // real https page AND, being on the same origin as the app, it is the
+  // only place where the PKCE verifier (kept in this web view's
+  // localStorage) also exists — so the exchange is guaranteed to work.
   function isNative() {
     try {
-      return !!(window.Capacitor && typeof window.Capacitor.isNativePlatform === "function" && window.Capacitor.isNativePlatform());
+      if (window.Capacitor && typeof window.Capacitor.isNativePlatform === "function") {
+        return !!window.Capacitor.isNativePlatform();
+      }
+      // Fallback: the native web view is served from https://localhost
+      // (or capacitor://localhost). The website is never on that host.
+      const host = String(location.hostname || "");
+      return (location.protocol === "capacitor:" || host === "localhost") &&
+        !!(window.Capacitor && (window.Capacitor.Plugins || typeof window.Capacitor.getPlugin === "function"));
     } catch (e) { return false; }
   }
   function nativePlugin(name) {
@@ -35,49 +53,127 @@
   function nativeRedirect() {
     return String(cfg.NATIVE_REDIRECT || "com.registerbook.community://auth");
   }
+  // The https page that bounces the browser back into the app.
+  function nativeBridgeUrl() {
+    const base = String(cfg.SITE_URL || "").replace(/\/+$/, "");
+    return base ? base + "/auth-callback.html" : "";
+  }
 
-  // Called when Chrome returns the login to the app (deep link). Handles
-  // both the PKCE code (?code=...) and the implicit tokens (#access_token).
+  let finishing = false;   // an exchange is in flight — avoid doing it twice
+  let lastHandled = "";    // the deep link we already looked at
+
+  function gateHint(html) {
+    try {
+      const el = document.getElementById("authHint");
+      if (el) {
+        el.className = "gate-hint ok";
+        el.innerHTML = html;
+      }
+    } catch (e) {}
+  }
+
+  // Called when Chrome returns the login to the app (deep link), both from
+  // App 'appUrlOpen' (warm start) and getLaunchUrl (cold start).
+  // Handles the PKCE code (?code=...) and the implicit tokens (#access_token).
   async function handleNativeReturn(url) {
+    if (!url || finishing) return;
     const c = getClient();
     if (!c) return;
+    if (url === lastHandled) return;
+    lastHandled = url;
+    finishing = true;
+    gateHint("Completing sign-in…");
+
     const browser = nativePlugin("Browser");
-    if (browser && typeof browser.close === "function") {
+    // Do NOT call Browser.close() here: on Android the deep link already
+    // removed the Custom Tab, and close() would re-open it (plugin #2610).
+    if (browser && typeof browser.close === "function" && /^capacitor:\/\//.test(location.protocol)) {
       try { await browser.close(); } catch (e) {}
     }
+
     let parsed = null;
-    try { parsed = new URL(url); } catch (e) { return; }
+    try { parsed = new URL(url); } catch (e) { finishing = false; return; }
     const params = parsed.searchParams;
     const hashParams = new URLSearchParams((parsed.hash || "").replace(/^#/, ""));
+
     const err = params.get("error") || hashParams.get("error");
     if (err) {
+      finishing = false;
       const desc = params.get("error_description") || hashParams.get("error_description") || err;
       if (window.__RB && typeof window.__RB.showGateError === "function") {
         window.__RB.showGateError(friendly({ message: desc, code: err }));
       }
       return;
     }
+
+    let session = null;
     const code = params.get("code") || hashParams.get("code");
     if (code && typeof c.auth.exchangeCodeForSession === "function") {
-      try { await c.auth.exchangeCodeForSession(code); } catch (e) { /* SIGNED_IN may still fire */ }
-      return;
+      try {
+        const res = await c.auth.exchangeCodeForSession(code);
+        session = res && res.data ? res.data.session : null;
+      } catch (e) { session = null; }
+      if (!session) {
+        // Try the other storage area: Chrome hands the code straight to the
+        // app only if the intermediate page redirect already happened; if it
+        // came from a browser where the verifier was never stored, the
+        // resetPasswordForEmail-less fallback is not possible — tell the truth.
+        const after = await getSession();
+        session = after || null;
+      }
     }
-    const accessToken = hashParams.get("access_token") || params.get("access_token");
-    const refreshToken = hashParams.get("refresh_token") || params.get("refresh_token");
-    if (accessToken && refreshToken && typeof c.auth.setSession === "function") {
-      try { await c.auth.setSession({ access_token: accessToken, refresh_token: refreshToken }); } catch (e) {}
+    if (!session) {
+      // A bare "com.registerbook.community://auth" (no ?code=) also arrives
+      // when the intermediate page already finished the login on its origin.
+      // getSession() above may have returned nothing in that case only
+      // because storage had not been written yet — check once more below.
+      const accessToken = hashParams.get("access_token") || params.get("access_token");
+      const refreshToken = hashParams.get("refresh_token") || params.get("refresh_token");
+      if (accessToken && refreshToken && typeof c.auth.setSession === "function") {
+        try {
+          const res = await c.auth.setSession({ access_token: accessToken, refresh_token: refreshToken });
+          session = res && res.data ? res.data.session : null;
+        } catch (e) { session = null; }
+      }
+    }
+    finishing = false;
+    if (session) {
+      gateHint("Signed in — opening your books…");
+      // onAuthStateChange in app.js also calls this; it is guarded against
+      // being run twice (loadingCloud flag).
+      if (window.__RB && typeof window.__RB.signedIn === "function") window.__RB.signedIn();
+    } else if (window.__RB && typeof window.__RB.showGateError === "function") {
+      window.__RB.showGateError({
+        title: "Google finished, but the app could not finish signing in",
+        message: "The login code did not match this phone's sign-in attempt. Tap “Continue with Google” once more.",
+        steps: []
+      });
     }
   }
 
+  let listenerInstalled = false;
   function listenNativeReturn() {
     if (!isNative()) return;
     const app = nativePlugin("App");
     if (!app || typeof app.addListener !== "function") return;
+    if (listenerInstalled) return;
+    listenerInstalled = true;
     try {
       app.addListener("appUrlOpen", ev => {
         const url = ev && (ev.url || ev.href || "");
         if (url) handleNativeReturn(url);
       });
+    } catch (e) {}
+    // Cold start: the app was killed while Chrome had the login. The URL is
+    // not delivered as an event, it is the launch intent.
+    try {
+      if (window.Capacitor && typeof window.Capacitor.getLaunchUrl === "function") {
+        window.Capacitor.getLaunchUrl((res, err2) => {
+          if (!err2 && res && res.url) handleNativeReturn(res.url);
+        }, {});
+      } else if (typeof app.getLaunchUrl === "function") {
+        app.getLaunchUrl().then(res => { if (res && res.url) handleNativeReturn(res.url); }).catch(() => {});
+      }
     } catch (e) {}
   }
 
@@ -93,8 +189,18 @@
       return null;
     }
     try {
+      const native = isNative();
+      const bridge = nativeBridgeUrl();
       client = window.supabase.createClient(cfg.SUPABASE_URL, cfg.SUPABASE_ANON_KEY, {
-        auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true }
+        auth: {
+          persistSession: true,
+          autoRefreshToken: true,
+          // PKCE everywhere. In the APK the code is exchanged explicitly in
+          // handleNativeReturn(), so let the library parse the URL only on
+          // the intermediate page (the one host that has the verifier).
+          flowType: "pkce",
+          detectSessionInUrl: !native || (!!bridge && location.href.indexOf(bridge) === 0)
+        }
       });
       return client;
     } catch (e) {
@@ -249,19 +355,33 @@
         return { ok: false, error: { kind: "lib", title: "Browser plugin missing", message: "The APK is missing the Browser plugin. Rebuild the APK (npx cap sync android).", steps: [] } };
       }
       try {
+        // flowType "pkce" is essential: the plain (implicit) flow returns the
+        // tokens in the #fragment of the URL, which a server-side 302 to a
+        // custom scheme can never carry — the phone would sit on a blank
+        // page forever. With PKCE Supabase sends ?code=... instead.
         const { data, error } = await c.auth.signInWithOAuth({
           provider: "google",
           options: {
             redirectTo: nativeRedirect(),
             skipBrowserRedirect: true,
+            flowType: "pkce",
             queryParams: { prompt: "select_account" }
           }
         });
         if (error) return { ok: false, error: friendly(error) };
         if (!data || !data.url) return { ok: false, error: friendly(new Error("Supabase did not return a login URL.")) };
+        // Remember what we asked Supabase for, so Settings → Diagnostics can
+        // show it if the login ever stalls again.
+        try {
+          localStorage.setItem("rb_last_oauth", JSON.stringify({
+            at: new Date().toISOString(),
+            redirectTo: nativeRedirect(),
+            bridge: nativeBridgeUrl(),
+            flow: "pkce",
+            url: String(data.url).slice(0, 400)
+          }));
+        } catch (e) {}
         await browser.open({ url: data.url });
-        // The appUrlOpen listener (registered in init) completes the login
-        // when Chrome returns. The person sees their name in the app.
         return { ok: true, native: true };
       } catch (e) {
         return { ok: false, error: friendly(e) };
@@ -319,6 +439,7 @@
     projectRef,
     cleanUrl,
     isNative,
+    nativeBridgeUrl,
     handleNativeReturn
   };
 })();

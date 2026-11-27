@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0f766e">
+<title>Finishing sign-in — RegisterBook</title>
+<link rel="icon" href="./icons/icon-192.png">
+<style>
+  :root { color-scheme: light dark; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; min-height: 100svh; display: grid; place-items: center;
+    padding: 24px; background: #f1f5f9; color: #0f172a;
+    font: 16px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    text-align: center;
+  }
+  .card {
+    width: 100%; max-width: 420px; background: #fff; border-radius: 18px;
+    padding: 28px 22px; box-shadow: 0 10px 30px rgba(15, 23, 42, .12);
+  }
+  .logo { font-size: 26px; font-weight: 800; letter-spacing: -.02em; }
+  .logo span { color: #0f766e; font-weight: 600; font-size: 15px; }
+  h1 { font-size: 19px; margin: 18px 0 8px; }
+  p { margin: 0 0 14px; color: #475569; font-size: 15px; }
+  .spinner {
+    width: 34px; height: 34px; margin: 4px auto 6px; border-radius: 50%;
+    border: 3px solid #cbd5e1; border-top-color: #0f766e;
+    animation: spin .9s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .btn {
+    display: inline-block; width: 100%; padding: 14px 18px; margin: 6px 0 0;
+    border: 0; border-radius: 12px; background: #0f766e; color: #fff;
+    font: inherit; font-weight: 700; font-size: 16px; text-decoration: none;
+    cursor: pointer;
+  }
+  .btn.secondary { background: #e2e8f0; color: #0f172a; }
+  .note { font-size: 13px; color: #64748b; margin-top: 16px; }
+  .hidden { display: none !important; }
+  code { background: #f1f5f9; padding: 2px 6px; border-radius: 6px; font-size: 13px; }
+</style>
+</head>
+<body>
+  <main class="card">
+    <div class="logo">📒 RegisterBook <span>Community</span></div>
+
+    <div id="busy">
+      <div class="spinner"></div>
+      <h1>Finishing sign-in…</h1>
+      <p>Taking you back to the RegisterBook app.</p>
+    </div>
+
+    <div id="manual" class="hidden">
+      <h1>Tap to return to the app</h1>
+      <p>Your sign-in worked. Android needs one tap to switch back to RegisterBook.</p>
+      <a id="openApp" class="btn" href="#">Open RegisterBook</a>
+    </div>
+
+    <div id="problem" class="hidden">
+      <h1 id="problemTitle">Sign-in could not finish</h1>
+      <p id="problemText"></p>
+      <a class="btn secondary" href="./">Back to RegisterBook</a>
+    </div>
+
+    <p class="note" id="note">
+      Nothing happening? Tap <b>Open RegisterBook</b> above, or close this page and reopen the app.
+    </p>
+  </main>
+
+<script src="config.js"></script>
+<script src="vendor/supabase.js"></script>
+<script>
+/* auth-callback.html — the bridge between Chrome and the RegisterBook app.
+ *
+ * Why this page exists:
+ *  1. Chrome Custom Tabs refuse to follow an automatic (302 / script)
+ *     redirect straight to a custom scheme such as
+ *     com.registerbook.community:// — it is blocked for security. A real
+ *     https page that then navigates to the scheme is allowed, and a tap
+ *     on a link always is.
+ *  2. This page is served from the same origin as the app (GitHub Pages),
+ *     so the PKCE code-verifier that auth.js stored in this origin's
+ *     localStorage is available here. The page therefore finishes the
+ *     login by itself and only then hands over to the app.
+ *
+ * It is also a complete standalone safety net: even if the app never
+ * receives the deep link, the person is signed in here and the app picks
+ * the session up at the same origin on its next start.
+ */
+(function () {
+  "use strict";
+
+  var APK_SCHEME = "com.registerbook.community://auth";
+  var closeUrl = "https://github.com/Mahicouragw/Register-book#readme";
+  try {
+    if (window.RB_CONFIG && window.RB_CONFIG.NATIVE_REDIRECT) {
+      APK_SCHEME = String(window.RB_CONFIG.NATIVE_REDIRECT);
+    }
+  } catch (e) {}
+
+  var $ = function (id) { return document.getElementById(id); };
+  function show(which) {
+    ["busy", "manual", "problem"].forEach(function (id) {
+      var el = $(id);
+      if (el) el.classList.toggle("hidden", id !== which);
+    });
+  }
+  function problem(title, text) {
+    $("problemTitle").textContent = title;
+    $("problemText").textContent = text;
+    show("problem");
+  }
+
+  var search = new URLSearchParams(location.search || "");
+  var hash = new URLSearchParams((location.hash || "").replace(/^#/, ""));
+
+  function get(k) { return search.get(k) || hash.get(k); }
+
+  var oauthError = get("error");
+  var code = get("code");
+  var accessToken = get("access_token");
+  var refreshToken = get("refresh_token");
+
+  // Nothing useful in the URL: the person opened this page directly.
+  if (!oauthError && !code && !accessToken) {
+    location.replace("./");
+    return;
+  }
+
+  if (oauthError) {
+    problem(
+      "Google could not finish the sign-in",
+      get("error_description") || oauthError
+    );
+    return;
+  }
+
+  // --- Build the deep link that carries the result back to the app ---------
+  function deepLink() {
+    var pairs = [];
+    if (code) pairs.push("code=" + encodeURIComponent(code));
+    if (accessToken) pairs.push("access_token=" + encodeURIComponent(accessToken));
+    if (refreshToken) pairs.push("refresh_token=" + encodeURIComponent(refreshToken));
+    if (!pairs.length) return "";
+    var sep = APK_SCHEME.indexOf("?") >= 0 ? "&" : "?";
+    return APK_SCHEME + sep + pairs.join("&");
+  }
+
+  var link = deepLink();
+
+  // --- Hand over to the app ------------------------------------------------
+  // NOTE: the app must do the code exchange, not this page. The PKCE
+  // code-verifier lives in the APK's own storage (origin https://localhost),
+  // which is a different origin from this page — so only the app can finish
+  // the login. This page's only job is to hand the code over reliably.
+  var jumped = false;
+  function jump() {
+    if (jumped) return;
+    jumped = true;
+    try { location.href = link; } catch (e) {}
+  }
+
+  $("openApp").setAttribute("href", link);
+
+  // Try immediately (a script navigation may be allowed), then make sure the
+  // person always has a real tappable button — a tap is never blocked.
+  jump();
+  setTimeout(function () {
+    if (document.visibilityState === "visible") show("manual");
+  }, 1200);
+})();
+</script>
+</body>
+</html>
