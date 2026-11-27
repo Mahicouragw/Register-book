@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">RegisterBook</string>
+    <string name="title_activity_main">RegisterBook</string>
+    <string name="package_name">com.registerbook.community</string>
+    <string name="custom_url_scheme">com.registerbook.community</string>
+</resources>

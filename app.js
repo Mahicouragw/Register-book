@@ -2403,10 +2403,41 @@
       if (d && d.type === "rb-notification-action") runNotificationAction(d.action, d.data);
     });
   }
+  // ------------------------------------------------------------ auto-update
+  // The service worker calls skipWaiting() the moment a new version is
+  // deployed, so the new code is ready immediately — but a page that is
+  // already open keeps running the OLD JavaScript until it reloads. These
+  // three pieces close that gap, so "we updated the site" becomes "the app
+  // updated itself" without the user doing anything:
+  //   1. controllerchange → the new worker took over → reload once.
+  //      (Only when this page already had a controller: a first-ever
+  //      install must not reload.)
+  //   2. reg.update() on an interval + whenever the tab comes back to the
+  //      front, so the browser actually checks for a new sw.js instead of
+  //      waiting up to 24 hours.
+  //   3. A short toast before the reload, so it never feels like a jump.
+  let swUpdateTimer = null;
+  function setupAutoUpdate(reg) {
+    if (!reg) return;
+    const hadController = !!navigator.serviceWorker.controller;
+    let reloaded = false;
+    navigator.serviceWorker.addEventListener("controllerchange", () => {
+      if (!hadController || reloaded) return;
+      reloaded = true;
+      toast("New version installed — refreshing…");
+      setTimeout(() => { try { window.location.reload(); } catch (e) {} }, 700);
+    });
+    const check = () => { try { const p = reg.update(); if (p && p.catch) p.catch(() => {}); } catch (e) {} };
+    check();
+    if (swUpdateTimer) clearInterval(swUpdateTimer);
+    swUpdateTimer = setInterval(check, 5 * 60 * 1000);
+    document.addEventListener("visibilitychange", () => { if (!document.hidden) check(); });
+    window.addEventListener("focus", check);
+  }
   function registerServiceWorker() {
     if (!("serviceWorker" in navigator)) return;
     navigator.serviceWorker.register("sw.js", { scope: "./" })
-      .then(() => setupSwMessages())
+      .then(reg => { setupSwMessages(); setupAutoUpdate(reg); })
       .catch(() => {});
   }
 

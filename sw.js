@@ -8,7 +8,7 @@
  * Network-first for same-origin files, so you always get the newest code when
  * you are online and the cached copy when you are not.
  */
-const VERSION = "rb-2026-10-29a";
+const VERSION = "rb-2026-11-27a";
 const CACHE = "registerbook-" + VERSION;
 
 const SHELL = [

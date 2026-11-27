@@ -408,3 +408,65 @@ Nothing here needs renaming when a Flutter app arrives:
 3. After 1–2 minutes: https://mahicouragw.github.io/Register-book/
 
 Current status via the API: `gh api repos/Mahicouragw/Register-book/pages` → `"status": "built"`.
+
+## Auto-update — the app updates itself
+
+When a new version is merged to `main`, GitHub Pages redeploys the website
+automatically (1–2 minutes). Phones running the app update themselves:
+
+- The service worker (`sw.js`) installs the new version immediately
+  (`skipWaiting`), and `app.js` reloads the open page into the new code the
+  moment the new worker takes over — with a short "New version installed —
+  refreshing…" toast first. A first-ever install never reloads.
+- The app asks the browser to check for a new version every 5 minutes and
+  whenever the tab comes back to the front, instead of waiting up to 24 hours.
+- Code files (js/css/json) are always fetched network-first, so a phone never
+  keeps running last week's app after a deploy. Offline, the cached copy is
+  used.
+
+**Rule for every future change:** bump `VERSION` in `sw.js` (e.g.
+`rb-2026-11-27a` → `rb-2026-11-27b`). That is what makes phones pick up the
+new version. The `tests/auto-update.test.js` suite checks the wiring.
+
+## Android APK
+
+The app ships as an Android APK built with [Capacitor](https://capacitorjs.com/).
+The APK contains the full website (offline-capable) inside a native shell.
+
+**How the APK is built (automatic):** the GitHub Actions workflow
+`.github/workflows/build-apk.yml` runs on every push to `main`. It copies the
+website into `www/` (`node tools/prepare-www.js`), syncs it into the Android
+project (`npx cap sync android`), builds a debug APK with Gradle, and uploads
+it as a downloadable artifact.
+
+**To download the APK:**
+
+1. Open https://github.com/Mahicouragw/Register-book/actions
+2. Click the latest **Build Android APK** run (the newest one on top).
+3. Scroll to **Artifacts** → download **RegisterBook-debug-apk**.
+4. Unzip it and install `app-debug.apk` on your phone (Android will ask to
+   allow installs from your browser once — tap Allow).
+
+**Honest limits of the APK:**
+
+- The APK is a **debug build** (signed with the standard debug key) — perfect
+  for testing on your own phone. For a Play Store release build, sign with
+  your own keystore and run `./gradlew assembleRelease` in `android/`.
+- **Google sign-in inside the APK's WebView is blocked by Google** (Google
+  refuses OAuth in embedded web views). Use the **website** (or the installed
+  PWA — Settings → "Install RegisterBook on this phone") for Google login,
+  push notifications and calls. Demo mode works fully inside the APK.
+- The APK contains a copy of the website, so it does not change itself when
+  the website changes — a fresh APK is built automatically on every push to
+  `main`, so the newest one is always one download away. The website/PWA
+  updates itself instantly (see "Auto-update" above).
+
+**Rebuilding the APK by hand (needs Android Studio / SDK):**
+
+```bash
+npm ci
+node tools/prepare-www.js
+npx cap sync android
+cd android && ./gradlew assembleDebug
+# APK: android/app/build/outputs/apk/debug/app-debug.apk
+```
