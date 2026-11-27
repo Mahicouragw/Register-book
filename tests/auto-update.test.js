@@ -70,8 +70,10 @@ test("Android APK: Capacitor config, www prep and CI workflow are wired", () => 
   assert.ok(prep.includes("vendor/supabase.js"), "www prep copies the bundled library");
 
   const wf = read(".github/workflows/build-apk.yml");
-  assert.ok(wf.includes("assembleDebug"), "CI builds the APK");
-  assert.ok(wf.includes("upload-artifact"), "CI uploads the APK");
+  assert.ok(wf.includes("assembleRelease"), "CI builds a signed release APK");
+  assert.ok(wf.includes("signingConfigs"), "the APK is signed, so it can update in place");
+  assert.ok(wf.includes("action-gh-release"), "CI publishes the .apk to a Release (one tap, no zip)");
+  assert.ok(wf.includes("RegisterBook.apk"), "the released file is named RegisterBook.apk");
   assert.ok(wf.includes("branches: [main]"), "CI runs on every push to main");
 
   assert.ok(fs.existsSync(path.join(ROOT, "android", "app", "build.gradle")), "android project exists");
