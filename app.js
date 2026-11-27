@@ -2541,6 +2541,10 @@
     startRealtime();
     checkRingingCalls();
     handleDeepLinks();
+    // Android app: keep the FCM token fresh on every launch (no-op on web).
+    if (window.RBPush && typeof window.RBPush.registerFcm === "function") {
+      window.RBPush.registerFcm().catch(() => {});
+    }
     return true;
   }
 

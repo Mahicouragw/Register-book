@@ -1179,8 +1179,45 @@ create policy rb_qanswers_write on public.rb_qanswers
 grant execute on function public.rb_profile_exists(uuid) to authenticated;
 grant execute on function public.rb_qcopy_is_open(text) to authenticated;
 
+-- =====================================================================
+-- PART 5 — FCM tokens for the Android app (real push inside the APK)
+-- =====================================================================
+-- The installed website (PWA) uses Web Push (rb_push_subscriptions).
+-- The Android app (Capacitor WebView) has no PushManager, so it uses
+-- Firebase Cloud Messaging instead. The app saves its FCM registration
+-- token here; rb-notify sends to it with the FCM HTTP v1 API.
+-- Safe to run twice. RLS: a person sees and manages only their own tokens.
+
+create table if not exists public.rb_fcm_tokens (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  token text not null unique,
+  platform text not null default 'android',
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+create index if not exists rb_fcm_tokens_user_idx on public.rb_fcm_tokens(user_id);
+
+alter table public.rb_fcm_tokens enable row level security;
+
+drop policy if exists rb_fcm_tokens_read on public.rb_fcm_tokens;
+create policy rb_fcm_tokens_read on public.rb_fcm_tokens
+  for select to authenticated using (user_id = auth.uid());
+
+drop policy if exists rb_fcm_tokens_insert on public.rb_fcm_tokens;
+create policy rb_fcm_tokens_insert on public.rb_fcm_tokens
+  for insert to authenticated with check (user_id = auth.uid());
+
+drop policy if exists rb_fcm_tokens_update on public.rb_fcm_tokens;
+create policy rb_fcm_tokens_update on public.rb_fcm_tokens
+  for update to authenticated using (user_id = auth.uid()) with check (user_id = auth.uid());
+
+drop policy if exists rb_fcm_tokens_delete on public.rb_fcm_tokens;
+create policy rb_fcm_tokens_delete on public.rb_fcm_tokens
+  for delete to authenticated using (user_id = auth.uid());
+
 -- ---------------------------------------------------------------- check
--- Expect 21 rows and row_security = true for every one of them.
+-- Expect 22 rows and row_security = true for every one of them.
 select tablename, rowsecurity
 from pg_tables
 where schemaname = 'public' and tablename like 'rb\_%'

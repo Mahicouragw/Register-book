@@ -886,6 +886,25 @@
     if (error) throw new Error(friendlyDbError(error));
   }
 
+  // ---- FCM tokens (Android app push) --------------------------------------
+  // The APK has no Web Push, so it registers an FCM token instead. The
+  // rb-notify Edge Function reads these with the service_role key and sends
+  // via FCM HTTP v1. RLS lets a person manage only their own tokens.
+  async function saveFcmToken(token) {
+    if (!token || !me) return null;
+    if (mode === "demo") return { token };
+    const { error } = await supa.from("rb_fcm_tokens").upsert({
+      user_id: me.id, token: String(token), platform: "android"
+    }, { onConflict: "token" });
+    if (error) throw new Error(friendlyDbError(error));
+    return { token: String(token) };
+  }
+  async function deleteFcmToken(token) {
+    if (mode === "demo" || !token) return;
+    const { error } = await supa.from("rb_fcm_tokens").delete().eq("token", String(token));
+    if (error) throw new Error(friendlyDbError(error));
+  }
+
   // ---- calls ------------------------------------------------------------
   async function startCall(userId, kind) {
     const k = kind === "video" ? "video" : "audio";
@@ -1130,7 +1149,7 @@
     notifications, unreadNotifications, markNotificationRead, markAllNotificationsRead, clearNotification,
     incomingInvites, invitesForGroup, invitesISent,
     invitePersonToGroup, createGroupInviteLink, acceptInvite, declineInvite, previewInvite,
-    savePushSubscription, deletePushSubscription,
+    savePushSubscription, deletePushSubscription, saveFcmToken, deleteFcmToken,
     startCall, updateCallStatus, activeCall, sendCallSignal, callSignals, fetchCallSignals,
     notifyRemote, fetchTurnCredentials,
     accountSummary, exportMyBooks, requestAccountDeletion, deleteAccountNow,

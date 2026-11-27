@@ -49,6 +49,56 @@
     } catch (e) { return "denied"; }
   }
 
+  // Real push inside the APK (FCM). The token is saved to rb_fcm_tokens;
+  // rb-notify sends to it. Foreground pushes show the same banner as the
+  // website; tapping one opens the right screen.
+  let fcmWired = false;
+  async function wireFcm(pn) {
+    if (fcmWired || !pn) return;
+    fcmWired = true;
+    try {
+      if (typeof pn.addListener === "function") {
+        await pn.addListener("registration", async tok => {
+          const value = tok && (tok.value || tok.token || "");
+          if (value) { try { await S.saveFcmToken(value); } catch (e) {} }
+        });
+        await pn.addListener("registrationError", () => {});
+        await pn.addListener("pushNotificationReceived", n => {
+          const d = (n && n.data) || {};
+          showInApp({
+            id: "fcm_" + (d.notificationId || Date.now()),
+            type: d.type || "system",
+            title: (n && n.title) || "RegisterBook",
+            body: (n && n.body) || "",
+            data: d
+          });
+        });
+        await pn.addListener("pushNotificationActionPerformed", async act => {
+          const d = (act && act.notification && act.notification.data) || {};
+          try { await S.refresh(); } catch (e) {}
+          const app = window.RBApp || {};
+          if (d.notificationId && typeof app.openNotification === "function") {
+            app.openNotification(d.notificationId);
+          } else if (typeof app.openInbox === "function") {
+            app.openInbox();
+          }
+        });
+      }
+    } catch (e) { /* listeners are best-effort */ }
+  }
+  async function registerFcm() {
+    if (!isNative() || !cfg().FCM_ENABLED) return { ok: false, reason: "fcm-off" };
+    const pn = nativePlugin("PushNotifications");
+    if (!pn || typeof pn.register !== "function") return { ok: false, reason: "no-plugin" };
+    await wireFcm(pn);
+    try {
+      await pn.register();
+      return { ok: true };
+    } catch (e) {
+      return { ok: false, reason: "register-failed", message: String((e && e.message) || e) };
+    }
+  }
+
   // ------------------------------------------------------------ capability
   function isSecure() {
     return window.isSecureContext || /^(https:|localhost$|127\.0\.0\.1$)/.test(location.host) || location.protocol === "https:";
@@ -162,12 +212,7 @@
       const perm = await requestNativePermission();
       if (perm === "granted") {
         // Real FCM registration only once Firebase is configured.
-        if (cfg().FCM_ENABLED) {
-          const pn = nativePlugin("PushNotifications");
-          try {
-            if (pn && typeof pn.register === "function") await pn.register();
-          } catch (e) { /* Firebase not configured yet — permission still counts */ }
-        }
+        if (cfg().FCM_ENABLED) await registerFcm();
         return { ok: true, message: "Notifications are ON ✓" };
       }
       return { ok: false, reason: "not-granted", message: "Permission was not granted. Open Android Settings → Apps → RegisterBook → Notifications and allow it." };
@@ -438,6 +483,6 @@
     // install (what makes push work when the app is closed)
     isInstalled, canPromptInstall, installPlatform, installHowTo, installStatus, promptInstall,
     // Android app (APK)
-    isNative, requestNativePermission
+    isNative, requestNativePermission, registerFcm
   };
 })();

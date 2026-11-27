@@ -19,6 +19,9 @@
 //   RB_VAPID_PUBLIC_KEY    the public half of the VAPID pair (also in config.js)
 //   RB_VAPID_PRIVATE_KEY   the private half — server side only
 //   RB_VAPID_SUBJECT       optional, defaults to a mailto for this app
+//   RB_FCM_SERVICE_ACCOUNT the Firebase service-account JSON (for the Android
+//                          app's real push). Optional: without it, only the
+//                          installed website (Web Push) receives pushes.
 //
 // SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are provided by the platform.
 //
@@ -279,6 +282,172 @@ async function buildPushRequest(subscription, payloadText, options) {
 }
 
 // ---- end of supabase/functions/_shared/webpush.js ----
+// ---- inlined from supabase/functions/_shared/fcm.js ----
+// fcm.js — Firebase Cloud Messaging (FCM) HTTP v1 sender, in pure WebCrypto.
+//
+// The installed website (PWA) uses Web Push (webpush.js). The Android app
+// (Capacitor WebView) has no PushManager, so it uses FCM instead — this is
+// the server half: it signs a JWT with the Firebase service-account key,
+// exchanges it for an OAuth access token, and POSTs the message to FCM.
+//
+// No dependencies at all. Only WebCrypto, so the same file runs in:
+//   • Deno / Supabase Edge Functions  (imported by rb-notify)
+//   • Node 18+                        (imported by the test suite)
+//
+// The service-account JSON is a Supabase secret called RB_FCM_SERVICE_ACCOUNT
+// (set by the owner in the Supabase dashboard — never in Git).
+//
+// NOTE: every top-level name here is prefixed `fcm` on purpose. The build
+// script inlines this file into rb-notify/index.ts alongside webpush.js, and
+// a duplicate `const` (e.g. a second `enc`) is a syntax error that would
+// crash the deployed function. Keep the prefixes.
+
+const fcmEnc = new TextEncoder();
+
+// ------------------------------------------------------------------ base64url
+function fcmB64UrlEncode(bytes) {
+  let bin = "";
+  for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+  return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+function fcmB64UrlEncodeText(text) {
+  return fcmB64UrlEncode(fcmEnc.encode(text));
+}
+
+function fcmB64UrlDecode(value) {
+  const raw = String(value == null ? "" : value).trim().replace(/-/g, "+").replace(/_/g, "/");
+  const pad = raw.length % 4;
+  const padded = raw + (pad ? "=".repeat(4 - pad) : "");
+  const bin = atob(padded);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+
+// ------------------------------------------------------------------ PEM → key
+// A Firebase service-account private key is a PEM block ("-----BEGIN PRIVATE
+// KEY-----..."). WebCrypto wants the raw PKCS#8 DER bytes.
+function pemToDer(pem) {
+  const body = String(pem || "")
+    .replace(/-----BEGIN [^-]+-----/g, "")
+    .replace(/-----END [^-]+-----/g, "")
+    .replace(/\s+/g, "");
+  if (!body) throw new Error("The service-account key is empty.");
+  return fcmB64UrlDecode(body);
+}
+
+async function fcmImportPrivateKey(pem) {
+  const der = pemToDer(pem);
+  return crypto.subtle.importKey(
+    "pkcs8",
+    der,
+    { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" },
+    false,
+    ["sign"]
+  );
+}
+
+// ------------------------------------------------------------------ JWT
+// FCM accepts a service-account JWT as the OAuth grant:
+//   header  { alg: RS256, typ: JWT }
+//   claims  { iss: client_email, scope: fcm, aud: oauth2 token endpoint,
+//             iat, exp (max 1 hour) }
+async function buildServiceAccountJwt(serviceAccount, opts) {
+  const o = opts || {};
+  const sa = serviceAccount || {};
+  const clientEmail = sa.client_email || "";
+  const privateKey = sa.private_key || "";
+  if (!clientEmail || !privateKey) {
+    throw new Error("The service account needs client_email and private_key.");
+  }
+  const now = Math.floor((o.now || Date.now()) / 1000);
+  const header = { alg: "RS256", typ: "JWT" };
+  const claims = {
+    iss: clientEmail,
+    scope: "https://www.googleapis.com/auth/firebase.messaging",
+    aud: "https://oauth2.googleapis.com/token",
+    iat: now,
+    exp: now + 3600
+  };
+  const signingInput =
+    fcmB64UrlEncodeText(JSON.stringify(header)) + "." + fcmB64UrlEncodeText(JSON.stringify(claims));
+  const key = await fcmImportPrivateKey(privateKey);
+  const sig = await crypto.subtle.sign("RSASSA-PKCS1-v1_5", key, fcmEnc.encode(signingInput));
+  return signingInput + "." + fcmB64UrlEncode(new Uint8Array(sig));
+}
+
+// Exchange the JWT for an OAuth access token (cached by the caller).
+async function getAccessToken(serviceAccount, opts) {
+  const o = opts || {};
+  const jwt = await buildServiceAccountJwt(serviceAccount, o);
+  const res = await (o.fetchImpl || fetch)("https://oauth2.googleapis.com/token", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body:
+      "grant_type=" +
+      encodeURIComponent("urn:ietf:params:oauth:grant-type:jwt-bearer") +
+      "&assertion=" +
+      encodeURIComponent(jwt)
+  });
+  if (!res.ok) {
+    const txt = await res.text().catch(() => "");
+    throw new Error("FCM token request failed (" + res.status + ")" + (txt ? ": " + txt.slice(0, 200) : ""));
+  }
+  const json = await res.json();
+  if (!json.access_token) throw new Error("FCM token request returned no access token.");
+  return json.access_token;
+}
+
+// ------------------------------------------------------------------ send
+// Sends one notification to one FCM registration token.
+// Returns { ok: true } or { ok: false, gone: true } for a dead token
+// (FCM answers 404 / UNREGISTERED — the caller deletes the row).
+async function sendFcmMessage(serviceAccount, accessToken, message, opts) {
+  const o = opts || {};
+  const sa = serviceAccount || {};
+  const projectId = sa.project_id || "";
+  if (!projectId) throw new Error("The service account has no project_id.");
+  if (!accessToken) throw new Error("No FCM access token.");
+  const m = message || {};
+  if (!m.token) throw new Error("No registration token to send to.");
+
+  const payload = {
+    message: {
+      token: m.token,
+      notification: { title: m.title || "RegisterBook", body: m.body || "" },
+      data: m.data || {},
+      android: {
+        priority: m.priority || "high",
+        ttl: m.ttl || "86400s",
+        notification: {
+          channel_id: m.channelId || "registerbook_default",
+          sound: "default",
+          tag: m.tag || undefined
+        }
+      }
+    }
+  };
+
+  const res = await (o.fetchImpl || fetch)(
+    "https://fcm.googleapis.com/v1/projects/" + encodeURIComponent(projectId) + "/messages:send",
+    {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer " + accessToken,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify(payload)
+    }
+  );
+
+  if (res.ok) return { ok: true };
+  const txt = await res.text().catch(() => "");
+  const gone = res.status === 404 || /UNREGISTERED|NOT_FOUND/i.test(txt);
+  return { ok: false, gone, status: res.status, error: txt.slice(0, 200) };
+}
+
+// ---- end of supabase/functions/_shared/fcm.js ----
 // ---- inlined from notify.js ----
 // notify.js — the exact wording of every push notification, in one place.
 //
@@ -465,6 +634,7 @@ Deno.serve(async (req: Request) => {
   const vapidPublic = Deno.env.get("RB_VAPID_PUBLIC_KEY") || "";
   const vapidPrivate = Deno.env.get("RB_VAPID_PRIVATE_KEY") || "";
   const vapidSubject = Deno.env.get("RB_VAPID_SUBJECT") || "mailto:numbersareplaying@gmail.com";
+  const fcmServiceAccountRaw = Deno.env.get("RB_FCM_SERVICE_ACCOUNT") || "";
 
   if (!url || !serviceKey) return fail(500, "The function is missing SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY.");
 
@@ -709,10 +879,62 @@ Deno.serve(async (req: Request) => {
     }
   }
 
+  // ---- 5b. push to the Android app (FCM) ---------------------------------
+  // The installed website uses Web Push (above). The Android app has no
+  // PushManager, so it registers an FCM token instead (rb_fcm_tokens).
+  // Both paths run, so a person with both the website and the app installed
+  // gets the notification on each. Without the service-account secret this
+  // whole block is skipped — Web Push still works.
+  let fcmDelivered = 0;
+  let fcmRemoved = 0;
+  if (fcmServiceAccountRaw) {
+    try {
+      const sa = JSON.parse(fcmServiceAccountRaw);
+      const accessToken = await getAccessToken(sa);
+      const { data: tokens, error: tokErr } = await admin
+        .from("rb_fcm_tokens")
+        .select("id, token")
+        .eq("user_id", recipientId);
+      if (!tokErr && tokens && tokens.length) {
+        const fcmData: Record<string, string> = {};
+        for (const [k, v] of Object.entries(data)) fcmData[k] = String(v == null ? "" : v);
+        fcmData.type = type;
+        fcmData.deepLink = deepLink;
+        fcmData.notificationId = note ? note.id : "";
+        for (const row of tokens) {
+          try {
+            const r = await sendFcmMessage(sa, accessToken, {
+              token: row.token,
+              title: w.title,
+              body: w.body,
+              data: fcmData,
+              tag: w.tag,
+              priority: type === "system" ? "normal" : "high",
+              ttl: type === "call" ? "60s" : "86400s"
+            });
+            if (r.ok) {
+              fcmDelivered += 1;
+            } else if (r.gone) {
+              await admin.from("rb_fcm_tokens").delete().eq("id", row.id);
+              fcmRemoved += 1;
+            } else {
+              pushError = pushError || ("FCM: " + (r.error || r.status));
+            }
+          } catch (e) {
+            pushError = pushError || ("FCM: " + String((e && (e as Error).message) || e));
+          }
+        }
+      }
+    } catch (e) {
+      pushError = pushError || ("FCM: " + String((e && (e as Error).message) || e));
+    }
+  }
+
   return json({
     ok: true,
-    delivered,
-    removed,
+    delivered: delivered + fcmDelivered,
+    removed: removed + fcmRemoved,
+    fcmDelivered,
     notificationId: note ? note.id : null,
     title: w.title,
     body: w.body,

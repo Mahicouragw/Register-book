@@ -15,6 +15,9 @@
 //   RB_VAPID_PUBLIC_KEY    the public half of the VAPID pair (also in config.js)
 //   RB_VAPID_PRIVATE_KEY   the private half — server side only
 //   RB_VAPID_SUBJECT       optional, defaults to a mailto for this app
+//   RB_FCM_SERVICE_ACCOUNT the Firebase service-account JSON (for the Android
+//                          app's real push). Optional: without it, only the
+//                          installed website (Web Push) receives pushes.
 //
 // SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are provided by the platform.
 //
@@ -22,6 +25,7 @@
 
 import { createClient } from "jsr:@supabase/supabase-js@2";
 import { buildPushRequest } from "../_shared/webpush.js";
+import { getAccessToken, sendFcmMessage } from "../_shared/fcm.js";
 import "../../../notify.js"; // sets globalThis.RBNotifyText (same wording as the browser)
 
 // deno-lint-ignore no-explicit-any
@@ -53,6 +57,7 @@ Deno.serve(async (req: Request) => {
   const vapidPublic = Deno.env.get("RB_VAPID_PUBLIC_KEY") || "";
   const vapidPrivate = Deno.env.get("RB_VAPID_PRIVATE_KEY") || "";
   const vapidSubject = Deno.env.get("RB_VAPID_SUBJECT") || "mailto:numbersareplaying@gmail.com";
+  const fcmServiceAccountRaw = Deno.env.get("RB_FCM_SERVICE_ACCOUNT") || "";
 
   if (!url || !serviceKey) return fail(500, "The function is missing SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY.");
 
@@ -297,10 +302,62 @@ Deno.serve(async (req: Request) => {
     }
   }
 
+  // ---- 5b. push to the Android app (FCM) ---------------------------------
+  // The installed website uses Web Push (above). The Android app has no
+  // PushManager, so it registers an FCM token instead (rb_fcm_tokens).
+  // Both paths run, so a person with both the website and the app installed
+  // gets the notification on each. Without the service-account secret this
+  // whole block is skipped — Web Push still works.
+  let fcmDelivered = 0;
+  let fcmRemoved = 0;
+  if (fcmServiceAccountRaw) {
+    try {
+      const sa = JSON.parse(fcmServiceAccountRaw);
+      const accessToken = await getAccessToken(sa);
+      const { data: tokens, error: tokErr } = await admin
+        .from("rb_fcm_tokens")
+        .select("id, token")
+        .eq("user_id", recipientId);
+      if (!tokErr && tokens && tokens.length) {
+        const fcmData: Record<string, string> = {};
+        for (const [k, v] of Object.entries(data)) fcmData[k] = String(v == null ? "" : v);
+        fcmData.type = type;
+        fcmData.deepLink = deepLink;
+        fcmData.notificationId = note ? note.id : "";
+        for (const row of tokens) {
+          try {
+            const r = await sendFcmMessage(sa, accessToken, {
+              token: row.token,
+              title: w.title,
+              body: w.body,
+              data: fcmData,
+              tag: w.tag,
+              priority: type === "system" ? "normal" : "high",
+              ttl: type === "call" ? "60s" : "86400s"
+            });
+            if (r.ok) {
+              fcmDelivered += 1;
+            } else if (r.gone) {
+              await admin.from("rb_fcm_tokens").delete().eq("id", row.id);
+              fcmRemoved += 1;
+            } else {
+              pushError = pushError || ("FCM: " + (r.error || r.status));
+            }
+          } catch (e) {
+            pushError = pushError || ("FCM: " + String((e && (e as Error).message) || e));
+          }
+        }
+      }
+    } catch (e) {
+      pushError = pushError || ("FCM: " + String((e && (e as Error).message) || e));
+    }
+  }
+
   return json({
     ok: true,
-    delivered,
-    removed,
+    delivered: delivered + fcmDelivered,
+    removed: removed + fcmRemoved,
+    fcmDelivered,
     notificationId: note ? note.id : null,
     title: w.title,
     body: w.body,
