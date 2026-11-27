@@ -29,7 +29,7 @@ function loadApp() {
     isConfigured() { return false; },
     projectRef() { return ""; }
   };
-  ["notify.js", "auth.js", "store.js", "push.js", "rtc.js", "app.js"]
+  ["notify.js", "auth.js", "store.js", "qbooks.js", "push.js", "rtc.js", "app.js", "qbooks-ui.js"]
     .forEach(f => w.eval(fs.readFileSync(path.join(ROOT, f), "utf8")));
   return { dom, w, doc: w.document };
 }

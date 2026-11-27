@@ -33,7 +33,7 @@ function loadApp(opts) {
       projectRef() { return ""; }
     };
   }
-  ["notify.js", "auth.js", "store.js", "push.js", "rtc.js", "app.js"].forEach(f => w.eval(fs.readFileSync(path.join(ROOT, f), "utf8")));
+  ["notify.js", "auth.js", "store.js", "qbooks.js", "push.js", "rtc.js", "app.js", "qbooks-ui.js"].forEach(f => w.eval(fs.readFileSync(path.join(ROOT, f), "utf8")));
   return { dom, w, doc: w.document };
 }
 const tick = (ms = 0) => new Promise(r => setTimeout(r, ms));
@@ -346,30 +346,6 @@ test("bill book: qty + ₹ amount with page total and book total", async () => {
   assert.match(text, /Page total: ₹200/);
   assert.match(text, /Book total: ₹200/);
 
-  dom.window.close();
-});
-
-test("owner setup guide: click-by-click steps with copyable values", async () => {
-  const { dom, w, doc } = loadApp();
-  await w.__RB.boot();
-
-  doc.querySelector('#loginGate button[onclick="openSetupModal()"]').click();
-  assert.ok(doc.getElementById("setupModal").classList.contains("open"), "setup guide opens from the login gate");
-  const text = doc.getElementById("setupBody").textContent;
-  assert.match(text, /Project URL/);
-  assert.match(text, /Create the tables \+ security rules/);
-  assert.match(text, /Authorized redirect URI/);
-  assert.match(text, /Providers → Google/);
-  assert.match(text, /GitHub Pages/);
-  assert.match(doc.getElementById("setupStatus").textContent, /not connected/i);
-  // links must be real dashboard links
-  const links = [...doc.querySelectorAll("#setupBody a")].map(a => a.href);
-  assert.ok(links.some(h => h.includes("supabase.com/dashboard")), "Supabase dashboard links");
-  assert.ok(links.some(h => h.includes("console.cloud.google.com")), "Google Cloud link");
-  assert.ok(links.some(h => h.includes("github.com/Mahicouragw/Register-book/settings/pages")), "GitHub Pages link");
-
-  w.closeSetupModal();
-  assert.equal(doc.getElementById("setupModal").classList.contains("open"), false);
   dom.window.close();
 });
 

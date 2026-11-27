@@ -35,7 +35,7 @@
     return s.length > n ? s.slice(0, n - 1) + "…" : s;
   }
 
-  // The four notification types. `actions` are the buttons shown on the phone
+  // The notification types. `actions` are the buttons shown on the phone
   // banner (Android Chrome shows them; iOS shows a plain banner until you tap).
   function wording(ev) {
     const e = ev || {};
@@ -96,6 +96,26 @@
           requireInteraction: true
         };
 
+      case "qbook":
+        return {
+          type: "qbook",
+          title: `${who} sent you a question book`,
+          body: e.text ? `“${clip(e.text)}” — tap to open and answer it.` : "Tap to open and answer it.",
+          actions: [{ action: "open", title: "Open" }],
+          tag: "rb-qbook",
+          renotify: true
+        };
+
+      case "qbook_done":
+        return {
+          type: "qbook_done",
+          title: `${who} returned a completed question book`,
+          body: e.text ? `“${clip(e.text)}” — tap to read the answers.` : "Tap to read the answers.",
+          actions: [{ action: "open", title: "Open" }],
+          tag: "rb-qbook-done",
+          renotify: true
+        };
+
       case "system":
       default:
         return {
@@ -118,6 +138,8 @@
       case "friend":  return `#requests=1`;
       case "invite":  return `#join=${encodeURIComponent(ev.code || "")}`;
       case "call":    return `#call=${encodeURIComponent(ev.callId || "")}`;
+      case "qbook":       return `#qbook=${encodeURIComponent(ev.copyId || "")}`;
+      case "qbook_done":  return `#qbookdone=${encodeURIComponent(ev.copyId || "")}`;
       default:        return `#home=1`;
     }
   }

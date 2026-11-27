@@ -1,0 +1,61 @@
+# Build the RegisterBook Android APK (debug build) on every push to main.
+#
+# What this does:
+#   1. Copies the website files into www/ (tools/prepare-www.js)
+#   2. Syncs them into the Android project (npx cap sync)
+#   3. Builds a debug APK with Gradle
+#   4. Uploads the APK as a downloadable artifact on the Actions page
+#
+# The APK is a debug build (signed with the standard debug key) — perfect
+# for testing on your own phone. For a Play Store release build, sign with
+# your own keystore (see README → "Android APK").
+#
+# The website itself (GitHub Pages) is unaffected by this workflow.
+
+name: Build Android APK
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build-apk:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Set up Java 21 (Capacitor 8 needs it)
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Prepare web assets (www/)
+        run: node tools/prepare-www.js
+
+      - name: Sync web assets into the Android project
+        run: npx cap sync android
+
+      - name: Build debug APK
+        working-directory: android
+        run: ./gradlew assembleDebug --no-daemon
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: RegisterBook-debug-apk
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error

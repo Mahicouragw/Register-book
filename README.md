@@ -15,9 +15,9 @@ notifications** and **real audio/video calling**.
 | Tab | What is on it |
 |---|---|
 | **🏠 Home** | Today's date, a greeting, **New for you** (unread notifications), a short list of your books, and **one big green button** to create a register. Nothing else. |
-| **📒 Library** | **My register books** (badge: `OWNER — you can edit`) and **Shared with me** (badge: `VIEW-ONLY — you can read and search, not edit`). Big rows. Opening a book shows the paper pages. |
+| **📒 Library** | **My register books** (badge: `OWNER — you can edit`) and **Shared with me** (badge: `VIEW-ONLY — you can read and search, not edit`). Big rows. Opening a book shows the paper pages. Also **❓ Create Questions Register Book** — write questions and A–D options on lined pages, send the book to a colleague, and read their answers when it comes back (see below). |
 | **👥 Community** | Search people, friend requests with **Accept / Decline**, groups you are in, **Join a group** with an invite code, group invites waiting for you, and private chats with **📞 Audio** / **🎥 Video** call buttons. |
-| **⚙️ Settings** | Your Google photo, name and email, **Sign out**, the notification switch, **Send test notification**, Terms & Conditions, Privacy Policy, **Delete my account**, and the owner setup guide. |
+| **⚙️ Settings** | Your Google photo, name and email, **Sign out**, the notification switch, **Send test notification**, Terms & Conditions, Privacy Policy, and **Delete my account**. |
 
 That is the whole app. Four buttons at the bottom of the phone, nothing hidden in a
 sidebar. Everything else in this README is setup detail.
@@ -84,11 +84,13 @@ tests/                       automated tests
 | **E.** Push notifications (PWA + VAPID + Edge Function) | ✅ built and **deployed** — ⏳ delivery must be tested on a phone |
 | **F.** Real WebRTC audio + video calling | ✅ built; **relay plumbing added** — ⏳ must be tested on two phones |
 | **G.** Flutter-ready (table names stable, plan in README) | ✅ documented |
-| `supabase/migrations.sql` — 15 tables | ✅ runs clean on PostgreSQL |
+| **H.** Create Questions Register Book — write, send, answer, submit, return | ✅ built, live, and tested end to end (automated) — ⏳ must be tested on two phones |
+| **I.** Install prompt + high-priority push for messages, invites and calls | ✅ built — ⏳ delivery when closed must be tested on a phone |
+| `supabase/migrations.sql` — 21 tables | ✅ runs clean on PostgreSQL |
 | Migration applied to the **live** project | ✅ **done** — 15 tables, all with RLS on |
-| RLS proven against the **live** database | ✅ **49 checks pass**, inside discarded transactions |
+| RLS proven against the **live** database | ✅ **49 checks pass** (earlier tables) + **question-book RLS: 44 live checks** (one probe re-run after an ordering mistake — see TEST_REPORT.md), inside discarded transactions |
 | VAPID secrets set in Supabase | ✅ **done** |
-| The three Edge Functions deployed | ✅ **done** — all `ACTIVE` |
+| The three Edge Functions deployed | ✅ **done** — all `ACTIVE`; `rb-notify` is now **version 3** (question-book notifications) |
 | GitHub Pages | ✅ `status: built`, branch `main`, folder `/` |
 
 ### What still needs a human
@@ -104,6 +106,10 @@ tests/                       automated tests
 Four migrations: `rb_part2a_new_tables_notifications_invites_calls`,
 `rb_part2b_group_invite_policies_and_helpers`, `rb_part2c_policies_grants_realtime`,
 `rb_part3_accepting_an_invite_grants_group_registers`. They are safe to re-run.
+Question books: `rb_part4a_question_books_tables_and_helpers`, `rb_part4b_question_books_policies`,
+`rb_part4c_question_books_grants_and_realtime`, and `rb_part4d_question_books_hardening`
+(the hardening adds the two new notification types, locks the copy's identity columns,
+checks recipients are real people, and locks answers once a book is submitted).
 The full script `supabase/migrations.sql` stays the single source of truth and is
 safe to run on a fresh project.
 
@@ -243,6 +249,59 @@ npm run build:functions     # regenerates the three index.ts files
 
 ---
 
+## Create Questions Register Book
+
+A question book is a notebook you write once and send to a colleague. They answer it
+and send it back. Here is the whole round trip, using the names from the spec:
+**Tiger** writes the book and sends it to **Silver**.
+
+1. **Tiger** → Library → **❓ Create Questions Register Book** → type a title → **Create book**.
+   The book opens on 20 lined, numbered pages.
+2. **Tiger** writes questions. Each question can have options **A, B, C, D**, a **written
+   answer** box, or both. **Add question**, **Add page**, **Edit** and **Delete** are all
+   there. Tiger's questions are never copied into Silver's copy by reference: every send
+   makes its own copy row, so Tiger's book is never overwritten.
+3. **Tiger** → **Send to…** → type Silver's name or user ID → **Find person** → **Send book**.
+   Silver gets a push notification and a row in **Received books** with the title, Tiger's
+   name and the date.
+4. **Silver** opens it. Questions and options are read-only for Silver. She taps an option
+   or types an answer; every change is saved straight away, so she can close the app and
+   come back later. **Save my progress** saves the page she is on.
+5. **Silver** → **Submit answers** (asks for confirmation). After that her answers are
+   locked. Only Tiger can ask for a revision, which reopens the same copy.
+6. **Silver** → **Send completed book back**. The book appears in Tiger's **Completed books**
+   with every original question, all four original options, Silver's chosen option, her
+   written answer, the respondent's name, the submission date and the status.
+
+**Status words**: Draft · Sent · Received · In progress · Submitted · Returned to creator.
+
+**What is enforced in the database** (not just in the screens) — see migration part 4d and
+`tests/question-books.rls.test.js`:
+- only the creator can change the questions, options and pages;
+- a recipient can only read a book they were sent, and only write their own answers;
+- a copy can never be moved to another book, another person, or another revision;
+- a copy moves through the statuses in one fixed order, and only the right person can move it;
+- answers are refused once a book is submitted, so an accidental double submit cannot change them;
+- a recipient must be a real registered person.
+
+**Accessibility**: every button and field has a name for TalkBack and VoiceOver; answer
+options are real radio buttons inside a labelled group; reading order is page →
+question number → question → options → written answer; nothing needs drag-and-drop.
+
+**Files**: `qbooks.js` (data and rules), `qbooks-ui.js` (screens), `supabase/migrations.sql`
+part 4, `supabase/functions/src/rb-notify.ts` (the `qbook` and `qbook_done` notifications).
+
+---
+
+## Install RegisterBook — why it matters for notifications
+
+Push notifications are delivered to the phone's **service worker**, not to a browser
+tab. Android only gives a web app that delivery path after it is **installed**. Until
+then, messages, invites and calls reach you only while RegisterBook is open. Settings
+→ **Install RegisterBook on this phone** shows the install button when the phone offers it,
+and written steps otherwise (Android: ⋮ → *Install app*; iPhone: Share → *Add to Home Screen*,
+iOS 16.4 or newer).
+
 ## Calling — honest limits
 
 Calls use real WebRTC: full-screen Answer / Decline, live timer, mic mute, camera off,
@@ -349,3 +408,135 @@ Nothing here needs renaming when a Flutter app arrives:
 3. After 1–2 minutes: https://mahicouragw.github.io/Register-book/
 
 Current status via the API: `gh api repos/Mahicouragw/Register-book/pages` → `"status": "built"`.
+
+## Auto-update — the app updates itself
+
+When a new version is merged to `main`, GitHub Pages redeploys the website
+automatically (1–2 minutes). Phones running the app update themselves:
+
+- The service worker (`sw.js`) installs the new version immediately
+  (`skipWaiting`), and `app.js` reloads the open page into the new code the
+  moment the new worker takes over — with a short "New version installed —
+  refreshing…" toast first. A first-ever install never reloads.
+- The app asks the browser to check for a new version every 5 minutes and
+  whenever the tab comes back to the front, instead of waiting up to 24 hours.
+- Code files (js/css/json) are always fetched network-first, so a phone never
+  keeps running last week's app after a deploy. Offline, the cached copy is
+  used.
+
+**Rule for every future change:** bump `VERSION` in `sw.js` (e.g.
+`rb-2026-11-27a` → `rb-2026-11-27b`). That is what makes phones pick up the
+new version. The `tests/auto-update.test.js` suite checks the wiring.
+
+## Android APK
+
+The app ships as an Android APK built with [Capacitor](https://capacitorjs.com/).
+The APK contains the full website (offline-capable) inside a native shell.
+
+**How the APK is built (automatic):** the GitHub Actions workflow
+`.github/workflows/build-apk.yml` runs on every push to `main`. It copies the
+website into `www/` (`node tools/prepare-www.js`), syncs it into the Android
+project (`npx cap sync android`), builds a debug APK with Gradle, and uploads
+it as a downloadable artifact.
+
+**To download the APK:**
+
+1. Open https://github.com/Mahicouragw/Register-book/actions
+2. Click the latest **Build Android APK** run (the newest one on top).
+3. Scroll to **Artifacts** → download **RegisterBook-debug-apk**.
+4. Unzip it and install `app-debug.apk` on your phone (Android will ask to
+   allow installs from your browser once — tap Allow).
+
+**Google sign-in inside the APK (opens Chrome, returns to the app):**
+
+Google refuses OAuth inside the APK's built-in web view, so the APK does it
+the way real apps do:
+
+1. You tap **Continue with Google** in the app.
+2. Chrome opens (a Custom Tab) and you sign in with your Google account.
+3. Chrome hands control back to the app through the deep link
+   `com.registerbook.community://auth` (declared in `AndroidManifest.xml`).
+4. The app exchanges the code for a session — you land back in RegisterBook
+   already signed in, with your name and photo. (Implemented in `auth.js`:
+   `skipBrowserRedirect` + Browser plugin + `appUrlOpen` + `exchangeCodeForSession`.)
+
+**One owner step is required** — Supabase must allow that return address:
+
+1. Supabase Dashboard → your **RegisterBook** project → **Authentication → URL Configuration**
+2. **Redirect URLs** → Add → paste exactly: `com.registerbook.community://auth` → Save
+
+Without this step, Supabase refuses the login with a redirect error. (The
+Google provider itself must also be enabled — see "Supabase setup" above.)
+
+**Permissions the APK declares** (`android/app/src/main/AndroidManifest.xml`):
+
+| Permission | Why |
+|---|---|
+| `INTERNET`, `ACCESS_NETWORK_STATE` | Supabase sync, realtime, calls |
+| `RECORD_AUDIO` | Voice/video calls (microphone) |
+| `CAMERA` | Video calls |
+| `MODIFY_AUDIO_SETTINGS`, `BLUETOOTH`, `BLUETOOTH_CONNECT` | Call audio routing (speaker, headset) |
+| `POST_NOTIFICATIONS` | Notification permission (Android 13+ asks at runtime; the app requests it from Settings → Notifications) |
+| `VIBRATE` | Notification buzz |
+| `WAKE_LOCK` | Keeps the phone awake during calls |
+
+Camera/microphone prompts appear automatically when a call starts (the web
+view asks Android). The notification prompt appears when you switch
+notifications on in Settings.
+
+**Push notifications — honest status:**
+
+- **Installed website (PWA): real push works today.** Install from Settings
+  ("Install RegisterBook on this phone") and notifications arrive even when
+  the app is closed — like Messenger. This is the recommended path.
+- **APK: the app asks for the notification permission, and the sending code
+  is already built and deployed-ready.** Real push inside the APK needs
+  Firebase (FCM) — the app's web view has no Web Push. Everything below is
+  already done in this repo: the `rb_fcm_tokens` table (live), the FCM
+  sender in `rb-notify` (`_shared/fcm.js`, tested), the token registration
+  in the app (`push.js`), and the permission prompt. Only the Firebase
+  project itself is left — it needs your Google account:
+
+  1. Go to https://console.firebase.google.com/ → **Add project** → name it
+     `RegisterBook` → continue (disable Google Analytics — not needed).
+  2. On the project home, click the **Android icon** → App nickname
+     `RegisterBook` → Android package name `com.registerbook.community` →
+     **Register app**.
+  3. Download **`google-services.json`** and upload it into this repo at
+     `android/app/google-services.json` (GitHub → `android/app` → **Add
+     file → Upload files**). It is not a secret — it is app configuration.
+     The build already switches the Firebase plugin on automatically when
+     this file exists (`android/app/build.gradle`), so nothing else to edit.
+  4. Firebase console → **Project Settings → Service accounts** → **Generate
+     new private key** → download the JSON → open it, copy the **entire**
+     file contents → Supabase Dashboard → your project → **Edge Functions →
+     Secrets** → add a secret named `RB_FCM_SERVICE_ACCOUNT` and paste the
+     whole JSON as its value. (Only in the dashboard — never in Git/chat.)
+  5. Rebuild the APK (the Actions workflow does this on every push to
+     `main`) and install it. Open the app, sign in, go to Settings →
+     Notifications → **Switch notifications ON** → **Send test notification**.
+     Close the app completely and send another message from a second
+     account — the notification arrives like Messenger.
+
+  The `rb-notify` function already sends to both Web Push (website) and FCM
+  (app) whenever the secret exists; without it, only the website path runs.
+
+**Other honest limits of the APK:**
+
+- The APK is a **debug build** (signed with the standard debug key) — perfect
+  for testing on your own phone. For a Play Store release build, sign with
+  your own keystore and run `./gradlew assembleRelease` in `android/`.
+- The APK contains a copy of the website, so it does not change itself when
+  the website changes — a fresh APK is built automatically on every push to
+  `main`, so the newest one is always one download away. The website/PWA
+  updates itself instantly (see "Auto-update" above).
+
+**Rebuilding the APK by hand (needs Android Studio / SDK):**
+
+```bash
+npm ci
+node tools/prepare-www.js
+npx cap sync android
+cd android && ./gradlew assembleDebug
+# APK: android/app/build/outputs/apk/debug/app-debug.apk
+```

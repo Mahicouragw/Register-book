@@ -15,6 +15,9 @@
 //   RB_VAPID_PUBLIC_KEY    the public half of the VAPID pair (also in config.js)
 //   RB_VAPID_PRIVATE_KEY   the private half — server side only
 //   RB_VAPID_SUBJECT       optional, defaults to a mailto for this app
+//   RB_FCM_SERVICE_ACCOUNT the Firebase service-account JSON (for the Android
+//                          app's real push). Optional: without it, only the
+//                          installed website (Web Push) receives pushes.
 //
 // SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are provided by the platform.
 //
@@ -22,6 +25,7 @@
 
 import { createClient } from "jsr:@supabase/supabase-js@2";
 import { buildPushRequest } from "../_shared/webpush.js";
+import { getAccessToken, sendFcmMessage } from "../_shared/fcm.js";
 import "../../../notify.js"; // sets globalThis.RBNotifyText (same wording as the browser)
 
 // deno-lint-ignore no-explicit-any
@@ -53,6 +57,7 @@ Deno.serve(async (req: Request) => {
   const vapidPublic = Deno.env.get("RB_VAPID_PUBLIC_KEY") || "";
   const vapidPrivate = Deno.env.get("RB_VAPID_PRIVATE_KEY") || "";
   const vapidSubject = Deno.env.get("RB_VAPID_SUBJECT") || "mailto:numbersareplaying@gmail.com";
+  const fcmServiceAccountRaw = Deno.env.get("RB_FCM_SERVICE_ACCOUNT") || "";
 
   if (!url || !serviceKey) return fail(500, "The function is missing SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY.");
 
@@ -159,6 +164,31 @@ Deno.serve(async (req: Request) => {
     title = String(ev.caller || ev.sender || "");
     body = "";
     data = { callId: id, senderId: uid };
+  } else if (type === "qbook" || type === "qbook_done") {
+    const id = String(ev.copyId || "");
+    if (!id) return fail(400, "copyId is required.");
+    const { data: row, error } = await admin
+      .from("rb_qbook_copies")
+      .select("id, book_id, sender_id, recipient_id")
+      .eq("id", id)
+      .maybeSingle();
+    if (error) return fail(500, error.message);
+    if (!row) return fail(404, "That question book does not exist.");
+
+    if (type === "qbook") {
+      // the creator is telling the recipient a book is waiting for them
+      if (row.sender_id !== uid) return fail(403, "You can only announce a book you sent.");
+      recipientId = row.recipient_id;
+    } else {
+      // the recipient is telling the creator they have finished it
+      if (row.recipient_id !== uid) return fail(403, "You can only return a book that was sent to you.");
+      recipientId = row.sender_id;
+    }
+
+    const { data: bk } = await admin.from("rb_qbooks").select("title").eq("id", row.book_id).maybeSingle();
+    title = String(ev.sender || "");
+    body = (bk && bk.title) || "";
+    data = { copyId: id, senderId: uid, bookId: row.book_id };
   } else {
     return fail(400, "Unknown notification type: " + type);
   }
@@ -181,7 +211,8 @@ Deno.serve(async (req: Request) => {
     type,
     senderId: data.senderId,
     code: data.code,
-    callId: data.callId
+    callId: data.callId,
+    copyId: data.copyId
   });
 
   // ---- 4. write the inbox row --------------------------------------------
@@ -228,7 +259,8 @@ Deno.serve(async (req: Request) => {
         code: data.code || "",
         callId: data.callId || "",
         requestId: data.requestId || "",
-        inviteId: data.inviteId || ""
+        inviteId: data.inviteId || "",
+        copyId: data.copyId || ""
       });
 
       for (const sub of subs) {
@@ -241,7 +273,11 @@ Deno.serve(async (req: Request) => {
               publicKey: vapidPublic,
               privateKey: vapidPrivate,
               ttl: type === "call" ? 60 : 86400,
-              urgency: type === "call" ? "high" : "normal"
+              // "high" wakes the phone straight away; "normal" can be batched
+              // or delayed by Android's Doze. Messages, friend requests,
+              // invites and calls must arrive now, so only the quiet system
+              // notices are allowed to be "normal".
+              urgency: type === "system" ? "normal" : "high"
             }
           );
           const res = await fetch(request.endpoint, {
@@ -266,10 +302,62 @@ Deno.serve(async (req: Request) => {
     }
   }
 
+  // ---- 5b. push to the Android app (FCM) ---------------------------------
+  // The installed website uses Web Push (above). The Android app has no
+  // PushManager, so it registers an FCM token instead (rb_fcm_tokens).
+  // Both paths run, so a person with both the website and the app installed
+  // gets the notification on each. Without the service-account secret this
+  // whole block is skipped — Web Push still works.
+  let fcmDelivered = 0;
+  let fcmRemoved = 0;
+  if (fcmServiceAccountRaw) {
+    try {
+      const sa = JSON.parse(fcmServiceAccountRaw);
+      const accessToken = await getAccessToken(sa);
+      const { data: tokens, error: tokErr } = await admin
+        .from("rb_fcm_tokens")
+        .select("id, token")
+        .eq("user_id", recipientId);
+      if (!tokErr && tokens && tokens.length) {
+        const fcmData: Record<string, string> = {};
+        for (const [k, v] of Object.entries(data)) fcmData[k] = String(v == null ? "" : v);
+        fcmData.type = type;
+        fcmData.deepLink = deepLink;
+        fcmData.notificationId = note ? note.id : "";
+        for (const row of tokens) {
+          try {
+            const r = await sendFcmMessage(sa, accessToken, {
+              token: row.token,
+              title: w.title,
+              body: w.body,
+              data: fcmData,
+              tag: w.tag,
+              priority: type === "system" ? "normal" : "high",
+              ttl: type === "call" ? "60s" : "86400s"
+            });
+            if (r.ok) {
+              fcmDelivered += 1;
+            } else if (r.gone) {
+              await admin.from("rb_fcm_tokens").delete().eq("id", row.id);
+              fcmRemoved += 1;
+            } else {
+              pushError = pushError || ("FCM: " + (r.error || r.status));
+            }
+          } catch (e) {
+            pushError = pushError || ("FCM: " + String((e && (e as Error).message) || e));
+          }
+        }
+      }
+    } catch (e) {
+      pushError = pushError || ("FCM: " + String((e && (e as Error).message) || e));
+    }
+  }
+
   return json({
     ok: true,
-    delivered,
-    removed,
+    delivered: delivered + fcmDelivered,
+    removed: removed + fcmRemoved,
+    fcmDelivered,
     notificationId: note ? note.id : null,
     title: w.title,
     body: w.body,

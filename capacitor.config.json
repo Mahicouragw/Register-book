@@ -1,0 +1,10 @@
+{
+  "appId": "com.registerbook.community",
+  "appName": "RegisterBook",
+  "webDir": "www",
+  "backgroundColor": "#ffffff",
+  "android": {
+    "allowMixedContent": false,
+    "captureInput": true
+  }
+}

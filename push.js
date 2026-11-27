@@ -18,6 +18,87 @@
 
   function cfg() { return window.RB_CONFIG || {}; }
 
+  // ------------------------------------------------------------ Android app
+  // Inside the APK (Capacitor), Web Push does not exist — the web view has
+  // no PushManager. Real push in the APK needs Firebase (FCM), which the
+  // owner sets up separately (see README). Until then the APK asks for the
+  // Android notification permission honestly, and the installed website
+  // (PWA) is the path that already has real push today.
+  function isNative() {
+    try {
+      return !!(window.Capacitor && typeof window.Capacitor.isNativePlatform === "function" && window.Capacitor.isNativePlatform());
+    } catch (e) { return false; }
+  }
+  function nativePlugin(name) {
+    try {
+      const cap = window.Capacitor;
+      if (cap && cap.Plugins && cap.Plugins[name]) return cap.Plugins[name];
+      if (cap && typeof cap.getPlugin === "function") return cap.getPlugin(name) || null;
+    } catch (e) {}
+    return null;
+  }
+  let nativePerm = "default"; // default | granted | denied (Android 13+ prompt)
+  async function requestNativePermission() {
+    const pn = nativePlugin("PushNotifications");
+    if (!pn || typeof pn.requestPermissions !== "function") return "unsupported";
+    try {
+      const res = await pn.requestPermissions();
+      const v = (res && (res.receive || res.result)) || "denied";
+      nativePerm = v === "granted" ? "granted" : v === "denied" ? "denied" : "default";
+      return nativePerm;
+    } catch (e) { return "denied"; }
+  }
+
+  // Real push inside the APK (FCM). The token is saved to rb_fcm_tokens;
+  // rb-notify sends to it. Foreground pushes show the same banner as the
+  // website; tapping one opens the right screen.
+  let fcmWired = false;
+  async function wireFcm(pn) {
+    if (fcmWired || !pn) return;
+    fcmWired = true;
+    try {
+      if (typeof pn.addListener === "function") {
+        await pn.addListener("registration", async tok => {
+          const value = tok && (tok.value || tok.token || "");
+          if (value) { try { await S.saveFcmToken(value); } catch (e) {} }
+        });
+        await pn.addListener("registrationError", () => {});
+        await pn.addListener("pushNotificationReceived", n => {
+          const d = (n && n.data) || {};
+          showInApp({
+            id: "fcm_" + (d.notificationId || Date.now()),
+            type: d.type || "system",
+            title: (n && n.title) || "RegisterBook",
+            body: (n && n.body) || "",
+            data: d
+          });
+        });
+        await pn.addListener("pushNotificationActionPerformed", async act => {
+          const d = (act && act.notification && act.notification.data) || {};
+          try { await S.refresh(); } catch (e) {}
+          const app = window.RBApp || {};
+          if (d.notificationId && typeof app.openNotification === "function") {
+            app.openNotification(d.notificationId);
+          } else if (typeof app.openInbox === "function") {
+            app.openInbox();
+          }
+        });
+      }
+    } catch (e) { /* listeners are best-effort */ }
+  }
+  async function registerFcm() {
+    if (!isNative() || !cfg().FCM_ENABLED) return { ok: false, reason: "fcm-off" };
+    const pn = nativePlugin("PushNotifications");
+    if (!pn || typeof pn.register !== "function") return { ok: false, reason: "no-plugin" };
+    await wireFcm(pn);
+    try {
+      await pn.register();
+      return { ok: true };
+    } catch (e) {
+      return { ok: false, reason: "register-failed", message: String((e && e.message) || e) };
+    }
+  }
+
   // ------------------------------------------------------------ capability
   function isSecure() {
     return window.isSecureContext || /^(https:|localhost$|127\.0\.0\.1$)/.test(location.host) || location.protocol === "https:";
@@ -35,8 +116,12 @@
     return isIos() && /Safari/.test(ua) && !/CriOS|FxiOS|EdgiOS|QQ|Line|Instagram|FBAN|FBAV|Twitter/.test(ua);
   }
   function isStandalone() {
-    return window.matchMedia("(display-mode: standalone)").matches
-      || window.navigator.standalone === true;
+    // matchMedia is missing in some embedded browsers and in test runners, and
+    // a crash here would take the whole Settings screen down with it.
+    try {
+      if (window.matchMedia && window.matchMedia("(display-mode: standalone)").matches) return true;
+    } catch (e) { /* fall through */ }
+    return window.navigator.standalone === true;
   }
   function iosBlocked() {
     return isIosSafari() && !isStandalone();
@@ -50,6 +135,15 @@
 
   // A human sentence describing the current state, shown in Settings.
   function statusText() {
+    if (isNative()) {
+      if (nativePerm === "granted") {
+        return { state: "granted", title: "Notifications are ON", body: "This phone allows RegisterBook notifications. Real push while the app is closed needs Firebase (FCM) — see README. The installed website already delivers real push today.", canEnable: false };
+      }
+      if (nativePerm === "denied") {
+        return { state: "denied", title: "Notifications are blocked for this app", body: "Open Android Settings → Apps → RegisterBook → Notifications and set it to Allow, then come back here.", canEnable: false };
+      }
+      return { state: "default", title: "Notifications are off", body: "Switch them on to allow RegisterBook notifications on this phone. Real push while the app is closed needs Firebase (FCM) — see README. The installed website already delivers real push today.", canEnable: true };
+    }
     if (!supported()) {
       return {
         state: "unsupported",
@@ -114,6 +208,15 @@
 
   // ------------------------------------------------------------ subscribe
   async function enable() {
+    if (isNative()) {
+      const perm = await requestNativePermission();
+      if (perm === "granted") {
+        // Real FCM registration only once Firebase is configured.
+        if (cfg().FCM_ENABLED) await registerFcm();
+        return { ok: true, message: "Notifications are ON ✓" };
+      }
+      return { ok: false, reason: "not-granted", message: "Permission was not granted. Open Android Settings → Apps → RegisterBook → Notifications and allow it." };
+    }
     const st = statusText();
     if (!st.canEnable) return { ok: false, reason: st.state, message: st.title + " — " + st.body };
 
@@ -149,6 +252,9 @@
   }
 
   async function disable() {
+    if (isNative()) {
+      return { ok: false, message: "Android does not let apps turn notifications off themselves. Open Android Settings → Apps → RegisterBook → Notifications and turn them off there." };
+    }
     try {
       const reg = await registerSw();
       if (!reg) return { ok: false };
@@ -236,6 +342,9 @@
   // ------------------------------------------------------------ test push
   // Sends a real push through the Edge Function, so you can prove it works.
   async function sendTest() {
+    if (isNative() && !cfg().FCM_ENABLED && !S.isDemo()) {
+      return { ok: false, message: "Real push inside the APK needs Firebase (FCM) — see README. The installed website already delivers real push today: open the website, install it, and press “Send test notification” there." };
+    }
     if (S.isDemo()) {
       S.data.notifications.push({
         id: "demo_nt_" + Date.now(), userId: S.me.id, type: "system",
@@ -258,9 +367,122 @@
     return { ok: true, delivered: res.delivered, message: "Sent to " + res.delivered + " device(s)." };
   }
 
+  // ------------------------------------------------------------ install (PWA)
+  // This is the piece that makes push actually work across apps and networks.
+  //
+  // A push message is delivered to the SERVICE WORKER, not to a tab. Android
+  // only gives a web app that delivery path once it is INSTALLED (Chrome turns
+  // it into a WebAPK); a bookmarked tab silently stops receiving pushes once
+  // its tab is closed or backgrounded. iPhone Safari needs Share → Add to Home
+  // Screen (iOS 16.4+). So "install" is not a nicety here — it is the thing
+  // that turns notifications from "works while the app is open" into "works
+  // whenever the other person sends something".
+  let deferredPrompt = null;
+
+  function installPlatform() {
+    const ua = navigator.userAgent || "";
+    if (isIos()) return "ios";
+    if (/Android/.test(ua)) return "android";
+    return "desktop";
+  }
+
+  function isInstalled() {
+    return isStandalone() || window.navigator.standalone === true;
+  }
+
+  /** True when the browser is offering to install right now (Android/Chrome). */
+  function canPromptInstall() { return !!deferredPrompt; }
+
+  /** How to install by hand, in plain words, for the phone you are holding. */
+  function installHowTo() {
+    if (installPlatform() === "ios") {
+      return "Tap the Share button at the bottom of Safari (the square with an arrow), scroll down, choose “Add to Home Screen”, then tap Add. Afterwards, always open RegisterBook from the new icon on your home screen.";
+    }
+    if (installPlatform() === "android") {
+      return "Tap the three dots (⋮) in the top-right corner of Chrome, then choose “Install app” or “Add to Home screen”. Afterwards, always open RegisterBook from the new icon on your home screen.";
+    }
+    return "Open your browser menu and choose “Install RegisterBook” or “Add to Home screen”.";
+  }
+
+  function installStatus() {
+    if (isNative()) {
+      return {
+        installed: true,
+        canPrompt: false,
+        platform: "android",
+        howTo: "",
+        why: "You are using the RegisterBook app ✓ — no install needed."
+      };
+    }
+    const installed = isInstalled();
+    return {
+      installed,
+      canPrompt: !installed && canPromptInstall(),
+      platform: installPlatform(),
+      howTo: installHowTo(),
+      // Why this matters, in one sentence the owner can read on a phone.
+      why: installed
+        ? "Installed ✓ — RegisterBook can now wake up and show messages and calls even when it is closed and you are using a different app."
+        : "Until RegisterBook is installed on this home screen, messages and calls only arrive while the app is open. Install it and they arrive whenever someone sends them."
+    };
+  }
+
+  /** Shows the phone's own install sheet. Returns { ok, outcome }. */
+  async function promptInstall() {
+    const evt = deferredPrompt;
+    if (!evt) return { ok: false, reason: "no-prompt", message: installHowTo() };
+    deferredPrompt = null;
+    try {
+      if (evt.prompt) evt.prompt();
+      const choice = evt.userChoice ? await evt.userChoice : null;
+      if (choice && choice.outcome === "accepted") {
+        notifyInstallChange();
+        return { ok: true, outcome: "accepted" };
+      }
+      return { ok: false, reason: "dismissed", outcome: choice ? choice.outcome : "unknown" };
+    } catch (e) {
+      return { ok: false, reason: "error", message: String((e && e.message) || e) };
+    }
+  }
+
+  // Set by app.js so the Settings screen can redraw the moment the phone
+  // becomes installable (or gets installed).
+  function notifyInstallChange() {
+    if (window.RBPush && typeof window.RBPush.onInstallChange === "function") {
+      try { window.RBPush.onInstallChange(); } catch (e) { /* never break on a redraw */ }
+    }
+  }
+
+  // Chrome on Android: fires when the app is installable. We hold the event so
+  // our own big "Install" button can trigger the phone's install sheet later.
+  window.addEventListener("beforeinstallprompt", e => {
+    try { e.preventDefault(); } catch (err) {}
+    deferredPrompt = e;
+    notifyInstallChange();
+  });
+
+  // Fires on every platform once the app really is on the home screen.
+  window.addEventListener("appinstalled", () => {
+    deferredPrompt = null;
+    notifyInstallChange();
+  });
+
+  // iOS has no install event at all, so re-check when the display mode changes.
+  try {
+    const mq = window.matchMedia("(display-mode: standalone)");
+    const onChange = () => notifyInstallChange();
+    if (mq.addEventListener) mq.addEventListener("change", onChange);
+    else if (mq.addListener) mq.addListener(onChange);
+  } catch (e) { /* older browsers */ }
+
+
   window.RBPush = {
     supported, isIos, isIosSafari, isStandalone, iosBlocked, permission, statusText,
     registerSw, enable, disable, isSubscribed, currentSubscription,
-    ting, buzz, showInApp, sendTest
+    ting, buzz, showInApp, sendTest,
+    // install (what makes push work when the app is closed)
+    isInstalled, canPromptInstall, installPlatform, installHowTo, installStatus, promptInstall,
+    // Android app (APK)
+    isNative, requestNativePermission, registerFcm
   };
 })();

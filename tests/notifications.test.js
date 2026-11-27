@@ -315,14 +315,16 @@ test("the deployed rb-notify Edge Function carries the exact same wording as the
     "You're invited to ",       // eslint-disable-line
     "is calling (",
     "Reply later",
-    "Accept", "Decline", "Join", "Answer", "Open"
+    "Accept", "Decline", "Join", "Answer", "Open",
+    "sent you a question book",          // question books
+    "returned a completed question book"
   ]) {
     assert.ok(built.includes(phrase),
       `rb-notify must contain the wording "${phrase}" — run: npm run build:functions`);
   }
 
   // and the deep links too
-  for (const frag of ["#chat=", "#requests=1", "#join=", "#call=", "#home=1"]) {
+  for (const frag of ["#chat=", "#requests=1", "#join=", "#call=", "#home=1", "#qbook=", "#qbookdone="]) {
     assert.ok(built.includes(frag), `rb-notify must contain the deep link ${frag}`);
   }
 

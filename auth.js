@@ -12,6 +12,75 @@
     return !!url && !!key && !/REPLACE/i.test(url) && !/REPLACE/i.test(key);
   }
 
+  // ------------------------------------------------------------ Android app
+  // Inside the APK (Capacitor), Google refuses OAuth in the built-in web
+  // view. So the login opens Chrome (a Custom Tab), the person signs in
+  // there, and Chrome hands control back to the app through the deep link
+  // com.registerbook.community://auth (see AndroidManifest + config.js).
+  // The app then exchanges the code for a session — the person lands back
+  // in RegisterBook already signed in, with their name and photo.
+  function isNative() {
+    try {
+      return !!(window.Capacitor && typeof window.Capacitor.isNativePlatform === "function" && window.Capacitor.isNativePlatform());
+    } catch (e) { return false; }
+  }
+  function nativePlugin(name) {
+    try {
+      const cap = window.Capacitor;
+      if (cap && cap.Plugins && cap.Plugins[name]) return cap.Plugins[name];
+      if (cap && typeof cap.getPlugin === "function") return cap.getPlugin(name) || null;
+    } catch (e) {}
+    return null;
+  }
+  function nativeRedirect() {
+    return String(cfg.NATIVE_REDIRECT || "com.registerbook.community://auth");
+  }
+
+  // Called when Chrome returns the login to the app (deep link). Handles
+  // both the PKCE code (?code=...) and the implicit tokens (#access_token).
+  async function handleNativeReturn(url) {
+    const c = getClient();
+    if (!c) return;
+    const browser = nativePlugin("Browser");
+    if (browser && typeof browser.close === "function") {
+      try { await browser.close(); } catch (e) {}
+    }
+    let parsed = null;
+    try { parsed = new URL(url); } catch (e) { return; }
+    const params = parsed.searchParams;
+    const hashParams = new URLSearchParams((parsed.hash || "").replace(/^#/, ""));
+    const err = params.get("error") || hashParams.get("error");
+    if (err) {
+      const desc = params.get("error_description") || hashParams.get("error_description") || err;
+      if (window.__RB && typeof window.__RB.showGateError === "function") {
+        window.__RB.showGateError(friendly({ message: desc, code: err }));
+      }
+      return;
+    }
+    const code = params.get("code") || hashParams.get("code");
+    if (code && typeof c.auth.exchangeCodeForSession === "function") {
+      try { await c.auth.exchangeCodeForSession(code); } catch (e) { /* SIGNED_IN may still fire */ }
+      return;
+    }
+    const accessToken = hashParams.get("access_token") || params.get("access_token");
+    const refreshToken = hashParams.get("refresh_token") || params.get("refresh_token");
+    if (accessToken && refreshToken && typeof c.auth.setSession === "function") {
+      try { await c.auth.setSession({ access_token: accessToken, refresh_token: refreshToken }); } catch (e) {}
+    }
+  }
+
+  function listenNativeReturn() {
+    if (!isNative()) return;
+    const app = nativePlugin("App");
+    if (!app || typeof app.addListener !== "function") return;
+    try {
+      app.addListener("appUrlOpen", ev => {
+        const url = ev && (ev.url || ev.href || "");
+        if (url) handleNativeReturn(url);
+      });
+    } catch (e) {}
+  }
+
   function projectRef() {
     try { return new URL(cfg.SUPABASE_URL).host.split(".")[0]; } catch (e) { return "<YOUR_PROJECT_REF>"; }
   }
@@ -173,6 +242,32 @@
       }
     } catch (e) { /* offline / blocked — fall through to the normal redirect */ }
 
+    // ---- Android app: open Chrome for the login, return via deep link ----
+    if (isNative()) {
+      const browser = nativePlugin("Browser");
+      if (!browser || typeof browser.open !== "function") {
+        return { ok: false, error: { kind: "lib", title: "Browser plugin missing", message: "The APK is missing the Browser plugin. Rebuild the APK (npx cap sync android).", steps: [] } };
+      }
+      try {
+        const { data, error } = await c.auth.signInWithOAuth({
+          provider: "google",
+          options: {
+            redirectTo: nativeRedirect(),
+            skipBrowserRedirect: true,
+            queryParams: { prompt: "select_account" }
+          }
+        });
+        if (error) return { ok: false, error: friendly(error) };
+        if (!data || !data.url) return { ok: false, error: friendly(new Error("Supabase did not return a login URL.")) };
+        await browser.open({ url: data.url });
+        // The appUrlOpen listener (registered in init) completes the login
+        // when Chrome returns. The person sees their name in the app.
+        return { ok: true, native: true };
+      } catch (e) {
+        return { ok: false, error: friendly(e) };
+      }
+    }
+
     try {
       const redirectTo = window.location.origin + window.location.pathname;
       const { error } = await c.auth.signInWithOAuth({
@@ -204,6 +299,7 @@
   }
 
   async function init() {
+    listenNativeReturn();
     const urlError = parseUrlError();
     const c = getClient();
     if (!c) return { client: null, session: null, urlError };
@@ -221,6 +317,8 @@
     init,
     friendly,
     projectRef,
-    cleanUrl
+    cleanUrl,
+    isNative,
+    handleNativeReturn
   };
 })();
