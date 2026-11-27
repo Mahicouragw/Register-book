@@ -2609,6 +2609,7 @@
     renderAll,
     setView,
     enterDemo,
-    boot
+    boot,
+    showGateError
   };
 })();

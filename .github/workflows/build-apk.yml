@@ -31,11 +31,11 @@ jobs:
         with:
           node-version: 22
 
-      - name: Set up Java 17
+      - name: Set up Java 21 (Capacitor 8 needs it)
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: 17
+          java-version: 21
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3

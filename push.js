@@ -18,6 +18,37 @@
 
   function cfg() { return window.RB_CONFIG || {}; }
 
+  // ------------------------------------------------------------ Android app
+  // Inside the APK (Capacitor), Web Push does not exist — the web view has
+  // no PushManager. Real push in the APK needs Firebase (FCM), which the
+  // owner sets up separately (see README). Until then the APK asks for the
+  // Android notification permission honestly, and the installed website
+  // (PWA) is the path that already has real push today.
+  function isNative() {
+    try {
+      return !!(window.Capacitor && typeof window.Capacitor.isNativePlatform === "function" && window.Capacitor.isNativePlatform());
+    } catch (e) { return false; }
+  }
+  function nativePlugin(name) {
+    try {
+      const cap = window.Capacitor;
+      if (cap && cap.Plugins && cap.Plugins[name]) return cap.Plugins[name];
+      if (cap && typeof cap.getPlugin === "function") return cap.getPlugin(name) || null;
+    } catch (e) {}
+    return null;
+  }
+  let nativePerm = "default"; // default | granted | denied (Android 13+ prompt)
+  async function requestNativePermission() {
+    const pn = nativePlugin("PushNotifications");
+    if (!pn || typeof pn.requestPermissions !== "function") return "unsupported";
+    try {
+      const res = await pn.requestPermissions();
+      const v = (res && (res.receive || res.result)) || "denied";
+      nativePerm = v === "granted" ? "granted" : v === "denied" ? "denied" : "default";
+      return nativePerm;
+    } catch (e) { return "denied"; }
+  }
+
   // ------------------------------------------------------------ capability
   function isSecure() {
     return window.isSecureContext || /^(https:|localhost$|127\.0\.0\.1$)/.test(location.host) || location.protocol === "https:";
@@ -54,6 +85,15 @@
 
   // A human sentence describing the current state, shown in Settings.
   function statusText() {
+    if (isNative()) {
+      if (nativePerm === "granted") {
+        return { state: "granted", title: "Notifications are ON", body: "This phone allows RegisterBook notifications. Real push while the app is closed needs Firebase (FCM) — see README. The installed website already delivers real push today.", canEnable: false };
+      }
+      if (nativePerm === "denied") {
+        return { state: "denied", title: "Notifications are blocked for this app", body: "Open Android Settings → Apps → RegisterBook → Notifications and set it to Allow, then come back here.", canEnable: false };
+      }
+      return { state: "default", title: "Notifications are off", body: "Switch them on to allow RegisterBook notifications on this phone. Real push while the app is closed needs Firebase (FCM) — see README. The installed website already delivers real push today.", canEnable: true };
+    }
     if (!supported()) {
       return {
         state: "unsupported",
@@ -118,6 +158,20 @@
 
   // ------------------------------------------------------------ subscribe
   async function enable() {
+    if (isNative()) {
+      const perm = await requestNativePermission();
+      if (perm === "granted") {
+        // Real FCM registration only once Firebase is configured.
+        if (cfg().FCM_ENABLED) {
+          const pn = nativePlugin("PushNotifications");
+          try {
+            if (pn && typeof pn.register === "function") await pn.register();
+          } catch (e) { /* Firebase not configured yet — permission still counts */ }
+        }
+        return { ok: true, message: "Notifications are ON ✓" };
+      }
+      return { ok: false, reason: "not-granted", message: "Permission was not granted. Open Android Settings → Apps → RegisterBook → Notifications and allow it." };
+    }
     const st = statusText();
     if (!st.canEnable) return { ok: false, reason: st.state, message: st.title + " — " + st.body };
 
@@ -153,6 +207,9 @@
   }
 
   async function disable() {
+    if (isNative()) {
+      return { ok: false, message: "Android does not let apps turn notifications off themselves. Open Android Settings → Apps → RegisterBook → Notifications and turn them off there." };
+    }
     try {
       const reg = await registerSw();
       if (!reg) return { ok: false };
@@ -240,6 +297,9 @@
   // ------------------------------------------------------------ test push
   // Sends a real push through the Edge Function, so you can prove it works.
   async function sendTest() {
+    if (isNative() && !cfg().FCM_ENABLED && !S.isDemo()) {
+      return { ok: false, message: "Real push inside the APK needs Firebase (FCM) — see README. The installed website already delivers real push today: open the website, install it, and press “Send test notification” there." };
+    }
     if (S.isDemo()) {
       S.data.notifications.push({
         id: "demo_nt_" + Date.now(), userId: S.me.id, type: "system",
@@ -300,6 +360,15 @@
   }
 
   function installStatus() {
+    if (isNative()) {
+      return {
+        installed: true,
+        canPrompt: false,
+        platform: "android",
+        howTo: "",
+        why: "You are using the RegisterBook app ✓ — no install needed."
+      };
+    }
     const installed = isInstalled();
     return {
       installed,
@@ -367,6 +436,8 @@
     registerSw, enable, disable, isSubscribed, currentSubscription,
     ting, buzz, showInApp, sendTest,
     // install (what makes push work when the app is closed)
-    isInstalled, canPromptInstall, installPlatform, installHowTo, installStatus, promptInstall
+    isInstalled, canPromptInstall, installPlatform, installHowTo, installStatus, promptInstall,
+    // Android app (APK)
+    isNative, requestNativePermission
   };
 })();

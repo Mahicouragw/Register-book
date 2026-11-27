@@ -36,6 +36,22 @@ window.RB_CONFIG = {
   EDGE_DELETE_ACCOUNT: "rb-delete-account",
   EDGE_TURN: "rb-turn-credentials",
 
+  // ------------------------------------------------------------ Android app
+  // In the APK, Google login opens Chrome (a Custom Tab). After login,
+  // Chrome hands control back to the app through this deep link, and the
+  // app exchanges the code for a session (see auth.js).
+  //
+  // IMPORTANT: this exact address must also be added in the Supabase
+  // dashboard → Authentication → URL Configuration → Redirect URLs,
+  // otherwise Supabase refuses the login. (README → "Android APK".)
+  NATIVE_REDIRECT: "com.registerbook.community://auth",
+
+  // Real push inside the APK needs Firebase (FCM). Until the owner creates
+  // a Firebase project and adds google-services.json + the server sender,
+  // this stays false: the APK only asks for the notification permission.
+  // The installed website (PWA) already has real Web Push today.
+  FCM_ENABLED: false,
+
   // ------------------------------------------------------------ Calling
   // Calls between two phones usually need a TURN relay, because mobile
   // networks and Wi-Fi routers hide phones behind NAT.

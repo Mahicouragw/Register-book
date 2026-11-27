@@ -447,15 +447,66 @@ it as a downloadable artifact.
 4. Unzip it and install `app-debug.apk` on your phone (Android will ask to
    allow installs from your browser once — tap Allow).
 
-**Honest limits of the APK:**
+**Google sign-in inside the APK (opens Chrome, returns to the app):**
+
+Google refuses OAuth inside the APK's built-in web view, so the APK does it
+the way real apps do:
+
+1. You tap **Continue with Google** in the app.
+2. Chrome opens (a Custom Tab) and you sign in with your Google account.
+3. Chrome hands control back to the app through the deep link
+   `com.registerbook.community://auth` (declared in `AndroidManifest.xml`).
+4. The app exchanges the code for a session — you land back in RegisterBook
+   already signed in, with your name and photo. (Implemented in `auth.js`:
+   `skipBrowserRedirect` + Browser plugin + `appUrlOpen` + `exchangeCodeForSession`.)
+
+**One owner step is required** — Supabase must allow that return address:
+
+1. Supabase Dashboard → your **RegisterBook** project → **Authentication → URL Configuration**
+2. **Redirect URLs** → Add → paste exactly: `com.registerbook.community://auth` → Save
+
+Without this step, Supabase refuses the login with a redirect error. (The
+Google provider itself must also be enabled — see "Supabase setup" above.)
+
+**Permissions the APK declares** (`android/app/src/main/AndroidManifest.xml`):
+
+| Permission | Why |
+|---|---|
+| `INTERNET`, `ACCESS_NETWORK_STATE` | Supabase sync, realtime, calls |
+| `RECORD_AUDIO` | Voice/video calls (microphone) |
+| `CAMERA` | Video calls |
+| `MODIFY_AUDIO_SETTINGS`, `BLUETOOTH`, `BLUETOOTH_CONNECT` | Call audio routing (speaker, headset) |
+| `POST_NOTIFICATIONS` | Notification permission (Android 13+ asks at runtime; the app requests it from Settings → Notifications) |
+| `VIBRATE` | Notification buzz |
+| `WAKE_LOCK` | Keeps the phone awake during calls |
+
+Camera/microphone prompts appear automatically when a call starts (the web
+view asks Android). The notification prompt appears when you switch
+notifications on in Settings.
+
+**Push notifications — honest status:**
+
+- **Installed website (PWA): real push works today.** Install from Settings
+  ("Install RegisterBook on this phone") and notifications arrive even when
+  the app is closed — like Messenger. This is the recommended path.
+- **APK: permission is asked, real push needs Firebase (FCM).** The APK
+  contains the Push Notifications plugin and asks for the Android
+  notification permission, but Web Push does not exist inside the APK's web
+  view. To turn on real push in the APK:
+  1. Create a Firebase project → add an Android app with package
+     `com.registerbook.community` → download `google-services.json` into
+     `android/app/`.
+  2. Add the Google Services Gradle plugin to `android/app/build.gradle`
+     (per the Firebase console instructions).
+  3. Set `FCM_ENABLED: true` in `config.js` and rebuild the APK.
+  4. Teach the `rb-notify` Edge Function to send via FCM (it currently
+     sends Web Push for the PWA).
+
+**Other honest limits of the APK:**
 
 - The APK is a **debug build** (signed with the standard debug key) — perfect
   for testing on your own phone. For a Play Store release build, sign with
   your own keystore and run `./gradlew assembleRelease` in `android/`.
-- **Google sign-in inside the APK's WebView is blocked by Google** (Google
-  refuses OAuth in embedded web views). Use the **website** (or the installed
-  PWA — Settings → "Install RegisterBook on this phone") for Google login,
-  push notifications and calls. Demo mode works fully inside the APK.
 - The APK contains a copy of the website, so it does not change itself when
   the website changes — a fresh APK is built automatically on every push to
   `main`, so the newest one is always one download away. The website/PWA
