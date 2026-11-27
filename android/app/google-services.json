@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "554040015295",
+    "project_id": "registerbook-1a482",
+    "storage_bucket": "registerbook-1a482.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:554040015295:android:8a9616817d83bf411f890a",
+        "android_client_info": {
+          "package_name": "com.registerbook.community"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDQM1XIDIONw-tcXHQhrusWtEshZUhC6b4"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
