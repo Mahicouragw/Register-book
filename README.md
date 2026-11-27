@@ -454,19 +454,39 @@ the way real apps do:
 
 1. You tap **Continue with Google** in the app.
 2. Chrome opens (a Custom Tab) and you sign in with your Google account.
-3. Chrome hands control back to the app through the deep link
+3. Supabase sends Chrome to `auth-callback.html` — a small page on the site.
+4. That page hands the login **code** to the app through the deep link
    `com.registerbook.community://auth` (declared in `AndroidManifest.xml`).
-4. The app exchanges the code for a session — you land back in RegisterBook
-   already signed in, with your name and photo. (Implemented in `auth.js`:
-   `skipBrowserRedirect` + Browser plugin + `appUrlOpen` + `exchangeCodeForSession`.)
+   The page shows one big **Open RegisterBook** button as a guaranteed way
+   back: Chrome refuses an *automatic* jump to a custom scheme, a tap never
+   is. So the person is never left staring at a blank page.
+5. The app exchanges the code for a session — you land back in RegisterBook
+   already signed in, with your name and photo.
 
-**One owner step is required** — Supabase must allow that return address:
+Why the extra page (and why PKCE) matters — this was a real bug:
+
+* The login used Supabase's default **implicit** flow, which returns the
+  tokens in the URL `#fragment`. A custom-scheme redirect cannot carry a
+  fragment, and Chrome Custom Tabs block an automatic redirect to a custom
+  scheme at all — the phone sat on "connecting" for ever.
+* The app now asks for `flowType: "pkce"` (both on the client and on the
+  OAuth call), so Supabase sends `?code=...` instead, and
+  `auth-callback.html` passes it across.
+* The app also re-checks for a session on `appUrlOpen`, on
+  `getLaunchUrl` (cold start), and on resume/visibility, so a return is
+  never missed. `watchNativeReturn()` in `app.js` drives the retry.
+
+**Two owner steps are required** — Supabase must allow both addresses:
 
 1. Supabase Dashboard → your **RegisterBook** project → **Authentication → URL Configuration**
-2. **Redirect URLs** → Add → paste exactly: `com.registerbook.community://auth` → Save
+2. **Redirect URLs** → Add → `com.registerbook.community://auth` → Save
+3. **Redirect URLs** → Add → `https://mahicouragw.github.io/Register-book/auth-callback.html` → Save
 
-Without this step, Supabase refuses the login with a redirect error. (The
-Google provider itself must also be enabled — see "Supabase setup" above.)
+(If you ever move the site to another domain, update `SITE_URL` in
+`config.js` and add the new `…/auth-callback.html` to the list above.)
+
+Still stuck? Open **Settings → Diagnostics** in the app: it now shows the
+login return page and the last login attempt it made.
 
 **Permissions the APK declares** (`android/app/src/main/AndroidManifest.xml`):
 

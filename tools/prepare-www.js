@@ -14,6 +14,7 @@ const WWW = path.join(ROOT, "www");
 
 const FILES = [
   "index.html",
+  "auth-callback.html",
   "styles.css",
   "config.js",
   "notify.js",

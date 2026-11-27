@@ -2198,6 +2198,20 @@
     }
 
     lines.push("Google redirect URI: https://" + (cfg.projectRef ? cfg.projectRef() : "…") + ".supabase.co/auth/v1/callback");
+    if (window.RBAuth && window.RBAuth.isNative && window.RBAuth.isNative()) {
+      lines.push("App mode: Android app (login runs in Chrome)");
+      lines.push("Login return page: " + (window.RBAuth.nativeBridgeUrl ? window.RBAuth.nativeBridgeUrl() : "(missing)"));
+      try {
+        const last = localStorage.getItem("rb_last_oauth");
+        if (last) {
+          const o = JSON.parse(last);
+          lines.push("Last login attempt: " + (o.at || "?") + " · flow " + (o.flow || "?"));
+          lines.push("  redirect_to=" + (o.redirectTo || "?"));
+        } else {
+          lines.push("Last login attempt: none on this phone yet");
+        }
+      } catch (e) {}
+    }
     lines.push("Signed in as: " + (S.me ? S.me.name + (S.isDemo() ? " (demo mode)" : " (Google)") : "nobody"));
     if (S.setupError) bad("Database error: " + S.setupError);
 
@@ -2216,10 +2230,46 @@
   }
   // ---------------------------------------------------------------- auth actions
   async function handleGoogleLogin() {
-    setHint("Opening Google…", "ok");
+    setHint("Opening Google in your browser…", "ok");
     const res = await window.RBAuth.signInGoogle();
     if (!res.ok) { showGateError(res.error); return; }
+    if (res.native) {
+      // Chrome is opening on top of the app. When the person comes back the
+      // app checks for the session (see the 'resume' listener in boot), so
+      // the phone never sits silently on "connecting" for ever.
+      setHint("Finish signing in with Google in Chrome — you will come straight back to RegisterBook.", "ok");
+      watchNativeReturn();
+      return;
+    }
     setHint("Connecting to Google… if nothing happens, check the popup/redirect settings.", "ok");
+  }
+
+  // While Chrome has the login, re-check the session every time the app comes
+  // back to the front (and a few times in the background). This is the safety
+  // net for the case where Android delivers the deep link without the event.
+  let watchingReturn = false;
+  function watchNativeReturn() {
+    if (watchingReturn) return;
+    watchingReturn = true;
+    const app = window.Capacitor && window.Capacitor.Plugins ? window.Capacitor.Plugins.App : null;
+    const check = async () => {
+      try {
+        const session = await window.RBAuth.getSession();
+        if (session && !S.isDemo()) { watchingReturn = false; await loadCloudAndShow(); }
+      } catch (e) { /* keep waiting */ }
+    };
+    if (app && typeof app.addListener === "function") {
+      try { app.addListener("resume", check); } catch (e) {}
+      try { app.addListener("appStateChange", ev => { if (ev && ev.isActive) check(); }); } catch (e) {}
+    }
+    document.addEventListener("visibilitychange", () => { if (!document.hidden) check(); });
+    window.addEventListener("focus", check);
+    // also poll for ~2 minutes in case the person leaves the app open
+    let tries = 0;
+    const timer = setInterval(async () => {
+      if (++tries > 40 || !watchingReturn) { clearInterval(timer); return; }
+      await check();
+    }, 3000);
   }
   async function handleSignOut() {
     clearInterval(state.timer);
@@ -2488,6 +2538,16 @@
     }
 
     const res = await window.RBAuth.init();
+    if (window.RBAuth.isNative && window.RBAuth.isNative()) {
+      // The deep link may arrive just after the web view loads — and on a
+      // cold start it is the launch intent. Keep a short retry going.
+      let tries = 0;
+      const retry = setInterval(async () => {
+        if (++tries > 20) { clearInterval(retry); return; }
+        const s2 = await window.RBAuth.getSession();
+        if (s2) { clearInterval(retry); await loadCloudAndShow(); }
+      }, 1500);
+    }
     if (res.urlError && !res.session) {
       showGate(res.urlError);
       return;
@@ -2614,6 +2674,8 @@
     setView,
     enterDemo,
     boot,
-    showGateError
+    showGateError,
+    // used by auth.js when Chrome hands the login back to the app
+    signedIn: async () => { await loadCloudAndShow(); }
   };
 })();
