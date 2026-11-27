@@ -1,14 +1,15 @@
-# Build the RegisterBook Android APK (debug build) on every push to main.
+# Build the RegisterBook Android APK on every push to main.
+#
+# Output: ONE file — RegisterBook.apk — attached to a GitHub Release, so the
+# owner can download it with a single tap (no zip, no unzipping).
 #
 # What this does:
-#   1. Copies the website files into www/ (tools/prepare-www.js)
+#   1. Copies the website files into www/ (tools/prepare-www.js). That script
+#      also stamps www/rb-build.js with whether Firebase is in this build.
 #   2. Syncs them into the Android project (npx cap sync)
-#   3. Builds a debug APK with Gradle
-#   4. Uploads the APK as a downloadable artifact on the Actions page
-#
-# The APK is a debug build (signed with the standard debug key) — perfect
-# for testing on your own phone. For a Play Store release build, sign with
-# your own keystore (see README → "Android APK").
+#   3. Generates a stable signing key (or restores the owner's from secrets)
+#   4. Builds a signed RELEASE APK
+#   5. Publishes it as the asset of a GitHub Release named "RegisterBook APK"
 #
 # The website itself (GitHub Pages) is unaffected by this workflow.
 
@@ -18,6 +19,9 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+
+permissions:
+  contents: write   # needed to create/update the Release
 
 jobs:
   build-apk:
@@ -58,13 +62,109 @@ jobs:
       - name: Sync web assets into the Android project
         run: npx cap sync android
 
-      - name: Build debug APK
-        working-directory: android
-        run: ./gradlew assembleDebug --no-daemon
+      # The APK must be signed or Android refuses to install an update over
+      # an already-installed copy. The key is cached between runs by its
+      # SHA-256 (Android blocks updates signed with a different key), so
+      # every build after the first can update the app in place.
+      # If the owner later adds KEYSTORE_BASE64 + KEYSTORE_PASSWORD secrets,
+      # those are used instead — that is the Play-Store-strength setup.
+      - name: Provide the signing key
+        id: keystore
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+        run: |
+          set -e
+          if [ -n "$KEYSTORE_BASE64" ] && [ -n "$KEYSTORE_PASSWORD" ]; then
+            echo "Using the owner's keystore from repository secrets."
+            echo "$KEYSTORE_BASE64" | base64 -d > android/app/registerbook.jks
+            echo "KEYSTORE_FILE=registerbook.jks" >> "$GITHUB_ENV"
+            echo "KEYSTORE_ALIAS=registerbook" >> "$GITHUB_ENV"
+            echo "STORE_PASS=$KEYSTORE_PASSWORD" >> "$GITHUB_ENV"
+          else
+            echo "No keystore secret — generating the project's fixed signing key."
+            keytool -genkeypair -v \
+              -keystore android/app/registerbook.jks \
+              -alias registerbook \
+              -keyalg RSA -keysize 2048 -validity 10000 \
+              -storepass registerbook -keypass registerbook \
+              -dname "CN=RegisterBook, OU=Community, O=RegisterBook, L=Hyderabad, S=Telangana, C=IN"
+            echo "KEYSTORE_FILE=registerbook.jks" >> "$GITHUB_ENV"
+            echo "KEYSTORE_ALIAS=registerbook" >> "$GITHUB_ENV"
+            echo "STORE_PASS=registerbook" >> "$GITHUB_ENV"
+          fi
 
-      - name: Upload APK artifact
+      - name: Cache the generated signing key
+        if: ${{ !secrets.KEYSTORE_BASE64 }}
+        uses: actions/cache@v4
+        with:
+          path: android/app/registerbook.jks
+          key: rb-keystore-${{ hashFiles('android/app/registerbook.jks') }}
+          restore-keys: rb-keystore-
+
+      - name: Configure signing in Gradle
+        run: |
+          cat >> android/app/build.gradle <<'GRADLE'
+
+          // ---- Release signing (added by the APK workflow) -----------------
+          android {
+              signingConfigs {
+                  release {
+                      storeFile file(System.getenv("KEYSTORE_FILE") ?: "registerbook.jks")
+                      storePassword System.getenv("STORE_PASS") ?: ""
+                      keyAlias System.getenv("KEYSTORE_ALIAS") ?: ""
+                      keyPassword System.getenv("STORE_PASS") ?: ""
+                  }
+              }
+              buildTypes {
+                  release {
+                      signingConfig signingConfigs.release
+                      minifyEnabled false
+                      shrinkResources false
+                  }
+              }
+          }
+          GRADLE
+
+      - name: Build signed release APK
+        working-directory: android
+        env:
+          KEYSTORE_FILE: ${{ env.KEYSTORE_FILE }}
+          KEYSTORE_ALIAS: ${{ env.KEYSTORE_ALIAS }}
+          STORE_PASS: ${{ env.STORE_PASS }}
+        run: ./gradlew assembleRelease --no-daemon
+
+      - name: Name the APK
+        run: |
+          cp android/app/build/outputs/apk/release/app-release.apk RegisterBook.apk
+          ls -lh RegisterBook.apk
+          echo "APK_SIZE=$(du -h RegisterBook.apk | cut -f1)" >> "$GITHUB_ENV"
+
+      - name: Upload to the workflow run (backup copy)
         uses: actions/upload-artifact@v4
         with:
-          name: RegisterBook-debug-apk
-          path: android/app/build/outputs/apk/debug/app-debug.apk
+          name: RegisterBook-apk
+          path: RegisterBook.apk
           if-no-files-found: error
+
+      # This is what the owner taps: a normal .apk download link.
+      - name: Publish as a GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: apk-latest
+          name: RegisterBook APK (latest)
+          body: |
+            **RegisterBook — install this file on your phone.**
+
+            1. Tap `RegisterBook.apk` below.
+            2. Open the downloaded file.
+            3. If Android asks, allow "Install unknown apps" for your browser.
+            4. Tap **Install** (or **Update** if you already have the app).
+
+            Sign in with Google: the app opens Chrome, and Chrome brings you
+            straight back to the app signed in.
+
+            Built automatically from `main` on every push.
+          files: RegisterBook.apk
+          make_latest: true
+          overwrite_files: true

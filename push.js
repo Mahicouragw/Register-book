@@ -86,12 +86,27 @@
       }
     } catch (e) { /* listeners are best-effort */ }
   }
+  // FCM registration is only attempted when the Android build actually has
+  // Firebase in it (android/app/google-services.json). Without that file the
+  // native plugin calls FirebaseMessaging.getInstance() on the main thread,
+  // which throws "Default FirebaseApp is not initialized" and KILLS the app
+  // the moment a person signs in. The build stamp tells us which case we are
+  // in, so the app simply skips it instead of crashing.
+  function firebaseInBuild() {
+    try {
+      return !!(window.RB_FIREBASE === true || window.RB_FIREBASE === "true");
+    } catch (e) { return false; }
+  }
+  let fcmAttempted = false;
   async function registerFcm() {
     if (!isNative() || !cfg().FCM_ENABLED) return { ok: false, reason: "fcm-off" };
+    if (!firebaseInBuild()) return { ok: false, reason: "no-firebase-in-build" };
+    if (fcmAttempted) return { ok: false, reason: "already-tried" };
     const pn = nativePlugin("PushNotifications");
     if (!pn || typeof pn.register !== "function") return { ok: false, reason: "no-plugin" };
-    await wireFcm(pn);
+    fcmAttempted = true;
     try {
+      await wireFcm(pn);
       await pn.register();
       return { ok: true };
     } catch (e) {
