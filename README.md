@@ -502,17 +502,17 @@ notifications on in Settings.
   2. On the project home, click the **Android icon** → App nickname
      `RegisterBook` → Android package name `com.registerbook.community` →
      **Register app**.
-  3. Download **`google-services.json`** and put it in `android/app/`
-     (it is not a secret — it is app configuration).
-  4. In `android/app/build.gradle`, add the Google Services plugin exactly
-     as the Firebase console shows (one line in the `plugins` block).
-  5. In `config.js`, set `FCM_ENABLED: true`.
-  6. Firebase console → **Project Settings → Service accounts** → **Generate
+  3. Download **`google-services.json`** and upload it into this repo at
+     `android/app/google-services.json` (GitHub → `android/app` → **Add
+     file → Upload files**). It is not a secret — it is app configuration.
+     The build already switches the Firebase plugin on automatically when
+     this file exists (`android/app/build.gradle`), so nothing else to edit.
+  4. Firebase console → **Project Settings → Service accounts** → **Generate
      new private key** → download the JSON → open it, copy the **entire**
      file contents → Supabase Dashboard → your project → **Edge Functions →
      Secrets** → add a secret named `RB_FCM_SERVICE_ACCOUNT` and paste the
      whole JSON as its value. (Only in the dashboard — never in Git/chat.)
-  7. Rebuild the APK (the Actions workflow does this on every push to
+  5. Rebuild the APK (the Actions workflow does this on every push to
      `main`) and install it. Open the app, sign in, go to Settings →
      Notifications → **Switch notifications ON** → **Send test notification**.
      Close the app completely and send another message from a second

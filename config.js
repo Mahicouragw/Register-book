@@ -46,11 +46,12 @@ window.RB_CONFIG = {
   // otherwise Supabase refuses the login. (README → "Android APK".)
   NATIVE_REDIRECT: "com.registerbook.community://auth",
 
-  // Real push inside the APK needs Firebase (FCM). Until the owner creates
-  // a Firebase project and adds google-services.json + the server sender,
-  // this stays false: the APK only asks for the notification permission.
-  // The installed website (PWA) already has real Web Push today.
-  FCM_ENABLED: false,
+  // Real push inside the APK needs Firebase (FCM). The app registers for
+  // FCM on launch; until the owner's Firebase project exists (google-
+  // services.json in android/app/ + the RB_FCM_SERVICE_ACCOUNT secret),
+  // registration fails silently and only the notification permission is
+  // asked. The installed website (PWA) already has real Web Push today.
+  FCM_ENABLED: true,
 
   // ------------------------------------------------------------ Calling
   // Calls between two phones usually need a TURN relay, because mobile
