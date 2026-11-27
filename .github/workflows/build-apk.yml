@@ -41,8 +41,11 @@ jobs:
         # GitHub's ubuntu runners already ship the Android SDK; the
         # setup-android action is unreliable, so install what we need
         # directly. Capacitor 8 needs compile/target SDK 36.
+        # sdkmanager is not on PATH — use its full location.
         run: |
+          export PATH="$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$PATH"
           echo "ANDROID_HOME=$ANDROID_HOME"
+          which sdkmanager
           yes | sdkmanager --licenses > /dev/null 2>&1 || true
           sdkmanager "platforms;android-36" "build-tools;36.0.0" "platform-tools"
 
