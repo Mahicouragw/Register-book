@@ -75,15 +75,28 @@ if (hasFirebase) {
     const raw = JSON.parse(fs.readFileSync(googleServices, "utf8"));
     const project = raw.project_info || {};
     const client = (raw.client || [])[0] || {};
-    const appId = (client.client_info || {}).mobilesdk_app_id || "";
+    const clientInfo = client.client_info || {};
+    const appId = clientInfo.mobilesdk_app_id || "";
+    // google-services.json keeps the sender id under client[].services, not at
+    // the top level: services.appinvite_service.other_platform_oauth_client
+    // is NOT it; the reliable source is project_info.project_number, and
+    // services.analytics_service is absent in a no-Analytics project. Use the
+    // services map when it exists, else fall back to project_number (which IS
+    // the FCM sender id for Android apps).
+    const services = client.services || {};
+    const svcSender =
+      (services.fcm_service || {}).gcm_defaultSenderId ||
+      (services.analytics_service || {}).analytics_property ||
+      "";
+    const senderId = svcSender || String(project.project_number || "");
     const publicConfig = {
       projectId: project.project_id || "",
-      gcmSenderId: (client.client_info || {}).project_id || "",
       applicationId: appId,
       apiKey: ((client.api_key || [])[0] || {}).current_key || "",
       storageBucket: project.storage_bucket || "",
       appId: appId,
-      messagingSenderId: (client.client_info || {}).project_id || ""
+      messagingSenderId: senderId,
+      gcmSenderId: senderId
     };
     firebaseJson = JSON.stringify(publicConfig);
   } catch (e) {
