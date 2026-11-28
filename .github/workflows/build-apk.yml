@@ -276,6 +276,5 @@ jobs:
             straight back to the app signed in.
 
             Built automatically from `main` on every push.
-          files: RegisterBook.apk
           make_latest: true
           overwrite_files: true
