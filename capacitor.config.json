@@ -6,5 +6,15 @@
   "android": {
     "allowMixedContent": false,
     "captureInput": true
+  },
+  "server": {
+    "allowNavigation": [
+      "tmkpdvljhnlnvbckbnsc.supabase.co",
+      "*.supabase.co",
+      "mahicouragw.github.io",
+      "accounts.google.com",
+      "*.google.com",
+      "*.googleapis.com"
+    ]
   }
 }

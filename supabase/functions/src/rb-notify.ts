@@ -23,7 +23,7 @@
 //
 // Deploy: see README.md → "Edge Functions".
 
-import { createClient } from "jsr:@supabase/supabase-js@2";
+import { createClient } from "npm:@supabase/supabase-js@2";
 import { buildPushRequest } from "../_shared/webpush.js";
 import { getAccessToken, sendFcmMessage } from "../_shared/fcm.js";
 import "../../../notify.js"; // sets globalThis.RBNotifyText (same wording as the browser)
@@ -31,7 +31,26 @@ import "../../../notify.js"; // sets globalThis.RBNotifyText (same wording as th
 // deno-lint-ignore no-explicit-any
 const NT = (globalThis as unknown as { RBNotifyText: any }).RBNotifyText;
 
-const JSON_HEADERS = { "Content-Type": "application/json" };
+// CORS — every response needs these, not just the preflight.
+//
+// The app runs inside the Android WebView, whose origin is https://localhost
+// (the website is https://mahicouragw.github.io). Without
+// Access-Control-Allow-Origin on the ACTUAL response the browser throws the
+// reply away and fetch() fails with the useless message "Failed to fetch".
+// The preflight (OPTIONS) already answered with CORS headers, which is what
+// made this so confusing: the request looked allowed, yet never arrived.
+const CORS_HEADERS: Record<string, string> = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Methods": "POST, OPTIONS",
+  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+  "Access-Control-Max-Age": "86400"
+};
+
+const JSON_HEADERS: Record<string, string> = {
+  "Content-Type": "application/json",
+  ...CORS_HEADERS
+};
+
 
 function json(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), { status, headers: JSON_HEADERS });
@@ -42,12 +61,7 @@ function fail(status: number, message: string) {
 
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
-    return new Response("ok", {
-      headers: {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type"
-      }
-    });
+    return new Response("ok", { status: 200, headers: CORS_HEADERS });
   }
   if (req.method !== "POST") return fail(405, "Use POST.");
 
