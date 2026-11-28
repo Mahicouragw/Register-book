@@ -43,6 +43,36 @@
                 android:name="android.support.FILE_PROVIDER_PATHS"
                 android:resource="@xml/file_paths"></meta-data>
         </provider>
+
+        <!-- ================= Firebase Cloud Messaging =================
+             A push that arrives while the app is closed (or in the
+             background) is drawn by the FCM SDK itself, not by this app.
+             Two values decide whether that notification is actually shown:
+
+               default_notification_channel_id
+                   The channel to post on. If it does not exist, Android
+                   throws the notification away with no error anyone sees.
+                   MainActivity creates this channel at startup, and the
+                   server always sends the same id (see _shared/fcm.js).
+                   Android 8+ requires it to be named here; this is the
+                   single most common cause of "notifications don't work
+                   when the app is closed".
+
+               default_notification_icon / _color
+                   Android uses the launcher icon as a fallback, which is a
+                   full-colour bitmap and gets drawn as a white blob. A
+                   monochrome icon is used instead. -->
+
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_channel_id"
+            android:value="registerbook_default" />
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_icon"
+            android:resource="@drawable/ic_stat_registerbook" />
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_color"
+            android:resource="@color/notification_color" />
+
     </application>
 
     <!-- Permissions -->

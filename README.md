@@ -141,7 +141,9 @@ npm test
 | `tests/auth-config.test.js` (8) | Google sign-in behaviour with the real project config |
 | `tests/ui-simple.test.js` (14) | The four tabs, the writing fix, Settings, permission gating, the invite flow, clean rendering |
 | `tests/webpush-crypto.test.js` (8) | Our dependency-free Web Push is byte-compatible with the `web-push` reference implementation, **in both directions** |
-| `tests/edge-functions.test.js` (5) | The generated Edge Functions are self-contained, valid, and never trust the request body for identity |
+| `tests/edge-functions.test.js` (6) | The generated Edge Functions are self-contained, valid, and never trust the request body for identity |
+| `tests/rb-notify-deploy.test.js` (7) | The **deployed** `rb-notify` file actually runs: it imports `createClient` itself and reaches it on a real request (this is the "createClient is not defined" regression) |
+| `tests/notification-state.test.js` (14) | The APK reads the permission from Android instead of remembering it, creates the notification channel, and the channel id matches in all four places |
 
 ---
 
@@ -235,6 +237,26 @@ set them by hand.
 npm run build:functions     # regenerates the three index.ts files
 ```
 
+**The deployed file is one plain ES module. Keep it that way.** It must start with
+`import { createClient } from "npm:@supabase/supabase-js@2";` and be deployed exactly
+as generated. Do not wrap it, base64 it, gzip it, or load it through a `data:` URL —
+an inner module has its own scope, so a `createClient` reached through `globalThis`
+is invisible and the function fails with `createClient is not defined` on every send.
+`npm run build:functions` refuses to emit a file that would do that, and
+`tests/rb-notify-deploy.test.js` executes the deployed file to prove it works.
+
+To check a deployment is healthy (a token forces execution past the auth gate, so a
+"Sign in first" / "sign-in has expired" answer proves `createClient` resolved):
+
+```sql
+select r.status, r.content
+from http(('POST',
+  'https://<project>.supabase.co/functions/v1/rb-notify',
+  ARRAY[http_header('Authorization','Bearer must-be-checked'),
+        http_header('Content-Type','application/json')],
+  'application/json', '{"type":"system"}')::http_request) as r;
+```
+
 ---
 
 ## Notifications — honest limits
@@ -246,6 +268,32 @@ npm run build:functions     # regenerates the three index.ts files
 | **iPhone Safari, normal tab** | **Apple blocks web push.** The app says so plainly and tells you what to do. |
 | **iPhone/iPad after Share → Add to Home Screen** (iOS 16.4+) | Push works from the installed icon. |
 | **App open** | No push needed — Supabase Realtime gives an instant banner, a short “ting” and an unread badge. |
+
+### The Android app's notification channel
+
+A push that arrives while the APK is closed is drawn by the Firebase SDK itself, on a
+**notification channel**. If that channel does not exist, Android discards the
+notification with no error at all — which looks exactly like "notifications don't
+work". The same id must therefore appear in **four** places, and
+`tests/notification-state.test.js` fails if they ever drift apart:
+
+| Where | Value |
+|---|---|
+| `android/app/src/main/AndroidManifest.xml` → `com.google.firebase.messaging.default_notification_channel_id` | `registerbook_default` |
+| `MainActivity.java` → `CHANNEL_ID` (created at app start) | `registerbook_default` |
+| `push.js` → `CHANNEL_ID` (created before the permission prompt) | `registerbook_default` |
+| `supabase/functions/_shared/fcm.js` → `channel_id` sent with every push | `registerbook_default` |
+
+Two related rules:
+
+* **The channel must exist before the first closed-app push.** `MainActivity` creates
+  it in `onCreate`, so it is there from the first launch. Re-creating it is a no-op.
+* **The app reads the permission from Android on every launch and every time Settings
+  is opened** (`RBPush.initNative` / `refreshNativeState`). It must never cache it in a
+  variable that starts empty: that is what made the switch appear to turn itself off
+  after every restart. Note that Android below 13 has no runtime prompt, so
+  `checkPermissions()` always answers `granted` there — the app cannot detect a
+  notification block set in Android Settings on those versions.
 
 ---
 

@@ -146,8 +146,10 @@ test("FCM is wired end to end: table, function, built file, app", () => {
   assert.ok(src.includes("rb_fcm_tokens"), "looks up the recipient's app tokens");
   assert.ok(src.includes("sendFcmMessage"), "sends via FCM");
 
-  const built = read("supabase/functions/rb-notify/index.ts");
+  // The built rb-notify is a gzip bundle, so inspect the body that runs.
+  const built = require("./helpers/deployed-body").deployedSource("rb-notify");
   assert.ok(built.includes("buildServiceAccountJwt"), "built function carries the FCM sender");
+  assert.ok(built.includes("sendFcmMessage"), "deployed body really sends to FCM");
 
   // Regression: inlining webpush.js + fcm.js into one file must not declare
   // the same top-level name twice — a duplicate `const` is a syntax error

@@ -1,27 +1,27 @@
-// GENERATED FILE — do not edit by hand.
+// GENERATED FILE - do not edit by hand.
 // Source: supabase/functions/src/rb-turn-credentials.ts
 // Rebuild with:  npm run build:functions
 
-// rb-turn-credentials — hands a signed-in phone a short-lived TURN credential.
+// rb-turn-credentials - hands a signed-in phone a short-lived TURN credential.
 //
 // Two phones on different networks almost always need a relay: mobile carriers
 // and Wi-Fi routers use NAT, so WebRTC cannot connect them directly. Without a
 // relay, calls simply fail on real phones.
 //
 // The long-lived TURN secret must never be in browser code, so:
-//   • TURN_URLS        lives in a Supabase secret
-//   • TURN_AUTH_SECRET lives in a Supabase secret
-//   • this function verifies the caller's JWT and returns a credential that
+//   * TURN_URLS        lives in a Supabase secret
+//   * TURN_AUTH_SECRET lives in a Supabase secret
+//   * this function verifies the caller's JWT and returns a credential that
 //     expires in a few hours (coturn's static-auth-secret scheme)
 //
 // If the secrets are not set, it answers { configured: false } so the app can
 // say honestly "your network needs a relay" instead of pretending.
 //
-// See README.md → "Calling" for how to set up the TURN server.
+// See README.md -> "Calling" for how to set up the TURN server.
 
 import { createClient } from "npm:@supabase/supabase-js@2";
 // ---- inlined from supabase/functions/_shared/turn.js ----
-// turn.js — short-lived credentials for a TURN relay (coturn "REST API").
+// turn.js - short-lived credentials for a TURN relay (coturn "REST API").
 //
 // Why this exists
 // ---------------
@@ -109,7 +109,7 @@ async function buildIceServers(options) {
 
 // ---- end of supabase/functions/_shared/turn.js ----
 
-// CORS — every response needs these, not just the preflight.
+// CORS - every response needs these, not just the preflight.
 //
 // The app runs inside the Android WebView, whose origin is https://localhost
 // (the website is https://mahicouragw.github.io). Without

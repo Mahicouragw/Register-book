@@ -1,8 +1,8 @@
-// GENERATED FILE — do not edit by hand.
+// GENERATED FILE - do not edit by hand.
 // Source: supabase/functions/src/rb-delete-account.ts
 // Rebuild with:  npm run build:functions
 
-// rb-delete-account — really deletes the signed-in account.
+// rb-delete-account - really deletes the signed-in account.
 //
 // The browser must never hold the service_role key, so this is the only place
 // that can call Supabase's admin deleteUser API. Every rb_ table has
@@ -10,7 +10,7 @@
 // profile, the books, the lines, the shares, the group memberships, the
 // messages, the push subscriptions and the notifications with it.
 //
-// Secrets: none — SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY come from the
+// Secrets: none - SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY come from the
 // platform. No service_role key is ever in Git or in browser code.
 //
 // If anything goes wrong it returns ok:false with a reason, so the app can say
@@ -18,7 +18,7 @@
 
 import { createClient } from "npm:@supabase/supabase-js@2";
 
-// CORS — every response needs these, not just the preflight.
+// CORS - every response needs these, not just the preflight.
 //
 // The app runs inside the Android WebView, whose origin is https://localhost
 // (the website is https://mahicouragw.github.io). Without

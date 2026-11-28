@@ -306,8 +306,9 @@ test("the deployed rb-notify Edge Function carries the exact same wording as the
   // rb-notify inlines notify.js at build time. If someone edits notify.js and
   // forgets `npm run build:functions`, the push banner would say one thing and
   // the in-app inbox another. This test makes that impossible to miss.
-  const built = fs.readFileSync(
-    path.join(__dirname, "..", "supabase", "functions", "rb-notify", "index.ts"), "utf8");
+  // rb-notify ships as a gzip bundle, so the wording lives inside it — reading
+  // only the outer file would silently pass on an empty or stale bundle.
+  const built = require("./helpers/deployed-body").deployedSource("rb-notify");
 
   for (const phrase of [
     "you have a new message",

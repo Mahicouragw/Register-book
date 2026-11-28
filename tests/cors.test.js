@@ -37,9 +37,17 @@ for (const fn of FUNCTIONS) {
   test(`${fn}: the BUILT file also carries CORS`, () => {
     const built = `supabase/functions/${fn}/index.ts`;
     if (!fs.existsSync(path.join(ROOT, built))) return; // not built in this checkout
-    const code = read(built);
-    assert.ok(code.includes("Access-Control-Allow-Origin"), "origin header present in the deployable file");
-    assert.ok(code.includes("...CORS_HEADERS"), "spread into the JSON responses");
+
+    const wrapper = read(built);
+    assert.ok(wrapper.includes("Access-Control-Allow-Origin"), "origin header present in the deployable file");
+    assert.ok(wrapper.includes("Access-Control-Allow-Methods"), "methods present");
+
+    // And the code that really runs must spread the same headers, so a 4xx
+    // stays readable instead of surfacing as "Failed to fetch".
+    const { deployedSource } = require("./helpers/deployed-body");
+    const body = deployedSource(fn);
+    assert.ok(body.includes("Access-Control-Allow-Origin"), "origin header inside the deployed body");
+    assert.ok(body.includes("...CORS_HEADERS"), "spread into the JSON responses");
   });
 }
 
@@ -72,16 +80,20 @@ test("edge functions import supabase-js from npm, not the dead jsr registry", ()
   const fs = require("fs");
   const path = require("path");
   const root = path.join(__dirname, "..");
-  const files = [
-    "supabase/functions/rb-notify/index.ts",
-    "supabase/functions/rb-delete-account/index.ts",
-    "supabase/functions/rb-turn-credentials/index.ts"
-  ];
-  for (const rel of files) {
-    const code = fs.readFileSync(path.join(root, rel), "utf8");
-    assert.doesNotMatch(code, /jsr:@supabase/, `${rel} must not import from jsr:`);
-    if (/createClient/.test(code)) {
-      assert.match(code, /npm:@supabase\/supabase-js@2/, `${rel} must import supabase-js from npm:`);
+  // rb-notify is wrapped (gzip bundle), so read the body that really runs.
+  const { deployedSource } = require("./helpers/deployed-body");
+  const bodies = {
+    "rb-notify": deployedSource("rb-notify"),
+    "rb-delete-account": fs.readFileSync(
+      path.join(root, "supabase/functions/rb-delete-account/index.ts"), "utf8"),
+    "rb-turn-credentials": fs.readFileSync(
+      path.join(root, "supabase/functions/rb-turn-credentials/index.ts"), "utf8")
+  };
+  for (const [name, code] of Object.entries(bodies)) {
+    assert.doesNotMatch(code, /jsr:@supabase/, `${name} must not import from jsr:`);
+    if (/createClient\s*\(/.test(code)) {
+      assert.match(code, /npm:@supabase\/supabase-js@2/,
+        `${name} must import supabase-js from npm — this is what broke as "createClient is not defined"`);
     }
   }
 });
