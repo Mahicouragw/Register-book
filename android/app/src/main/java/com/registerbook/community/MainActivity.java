@@ -1,5 +1,6 @@
 package com.registerbook.community;
 
+import android.app.Notification;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.media.AudioAttributes;
@@ -60,7 +61,7 @@ public class MainActivity extends BridgeActivity {
         channel.enableVibration(true);
         channel.enableLights(true);
         channel.setShowBadge(true);
-        channel.setLockscreenVisibility(android.app.Notification.VISIBILITY_PRIVATE);
+        channel.setLockscreenVisibility(Notification.VISIBILITY_PRIVATE);
 
         // Same default sound the web Push path uses.
         AudioAttributes audio = new AudioAttributes.Builder()
