@@ -80,16 +80,17 @@
     }
 
     const apkUrl = String(json.apk_url == null ? "" : json.apk_url).trim();
-    if (!apkUrl) {
-      return { ok: false, reason: "apk_url is missing from version.json." };
-    }
-    // Only https: an APK over http could be swapped in transit, and Android
-    // itself refuses cleartext downloads on modern versions anyway.
-    if (!/^https:\/\//i.test(apkUrl)) {
-      return { ok: false, reason: "apk_url must start with https://" };
-    }
-    if (!/\.apk(\?|#|$)/i.test(apkUrl)) {
-      return { ok: false, reason: "apk_url does not point at a .apk file." };
+    // A manifest may publish a bundle-only release. In that case apk_url is
+    // intentionally absent; APK fields remain validated whenever supplied.
+    if (apkUrl) {
+      // Only https: an APK over http could be swapped in transit, and Android
+      // itself refuses cleartext downloads on modern versions anyway.
+      if (!/^https:\/\//i.test(apkUrl)) {
+        return { ok: false, reason: "apk_url must start with https://" };
+      }
+      if (!/\.apk(\?|#|$)/i.test(apkUrl)) {
+        return { ok: false, reason: "apk_url does not point at a .apk file." }
+      }
     }
 
     return {
@@ -100,9 +101,65 @@
         title: String(json.title == null || json.title === "" ? "Update to the latest version" : json.title),
         changelog: String(json.changelog == null ? "" : json.changelog),
         apkUrl,
-        forceUpdate: json.force_update === true
+        forceUpdate: json.force_update === true,
+        // Part 2: the optional content bundle. Absent or malformed means
+        // "this manifest has no content update", never an error — an APK-only
+        // release must keep working.
+        bundle: parseBundle(json)
       }
     };
+  }
+
+  /**
+   * Reads the optional content-bundle section of version.json.
+   *
+   * Returns null when there is none, or when what is there cannot be trusted.
+   * The fields are:
+   *
+   *   bundle_url      https://.../bundle.zip
+   *   bundle_version  a whole number that only ever goes up
+   *   bundle_sha256   hash of the files inside, see tools/make-bundle.js
+   *   bundle_notes    optional, shown as the reason for the update
+   *
+   * A bundle must be https and must carry a positive integer version; the hash
+   * is optional but strongly recommended, because it is what lets the phone
+   * refuse a corrupted or tampered download.
+   */
+  function parseBundle(json) {
+    if (!json || typeof json !== "object") return null;
+    const url = String(json.bundle_url == null ? "" : json.bundle_url).trim();
+    if (!url) return null;
+    if (!/^https:\/\//i.test(url)) return null;
+    if (!/\.zip(\?|#|$)/i.test(url)) return null;
+
+    const version = usableCode(json.bundle_version);
+    if (version == null) return null;
+
+    const sha = String(json.bundle_sha256 == null ? "" : json.bundle_sha256).trim().toLowerCase();
+    const validSha = /^[a-f0-9]{64}$/.test(sha) ? sha : "";
+
+    return {
+      url,
+      version,
+      sha256: validSha,
+      notes: String(json.bundle_notes == null ? "" : json.bundle_notes)
+    };
+  }
+
+  /**
+   * Should this phone fetch the content bundle?
+   *
+   * The rule is deliberately conservative: only a strictly higher
+   * bundle_version is worth a download, and never when the APK itself is
+   * about to be replaced — the new APK carries its own content, so pulling a
+   * bundle first would be wasted work and an extra 30 seconds of setup.
+   */
+  function shouldUpdateBundle(bundle, installedBundle, apkUpdateAvailable) {
+    if (!bundle) return false;
+    if (apkUpdateAvailable) return false;
+    const have = usableCode(installedBundle && installedBundle.version);
+    if (have == null) return true;
+    return bundle.version > have;
   }
 
   /**
@@ -174,10 +231,16 @@
     parseVersion,
     compareVersions,
     parseManifest,
+    parseBundle,
+    shouldUpdateBundle,
     isNewer,
     describeVersion,
     progressLabel,
-    friendlyDownloadError
+    friendlyDownloadError,
+    bundleLabel: function (state) {
+      if (!state || !state.active) return "Built into the app";
+      return "Content v" + state.version;
+    }
   };
 
   if (typeof module !== "undefined" && module.exports) module.exports = Logic;
@@ -363,22 +426,31 @@
 
     state.lastChecked = Date.now();
 
-    if (!isNewer(parsed.update, installed)) {
+    if (!parsed.update.apkUrl || !isNewer(parsed.update, installed)) {
       state.status = "idle";
       state.update = null;
       emit();
+      // No new APK — but there may still be new content. This runs in the
+      // background and must never make the panel appear or hold up the UI.
+      const content = await maybeUpdateBundle(parsed.update.bundle, false);
+      let message = "You are on the latest version (" + describeVersion(installed.versionName, installed.versionCode) + ").";
+      if (content && content.updated) message += " New content was downloaded and is ready.";
       return {
         ok: true,
         native: true,
         available: false,
         installed,
         latest: parsed.update.versionName,
-        message: "You are on the latest version (" + describeVersion(installed.versionName, installed.versionCode) + ")."
+        content,
+        message
       };
     }
 
     state.update = parsed.update;
     state.status = "available";
+    // A new APK carries the content it was built with, so a bundle would be
+    // wasted work. Record that we deliberately skipped it instead.
+    if (parsed.update.bundle) state.bundleSkipped = "apk-first";
     emit();
 
     const forced = parsed.update.forceUpdate;
@@ -386,6 +458,154 @@
       openPanel();
     }
     return { ok: true, native: true, available: true, installed, latest: parsed.update.versionName };
+  }
+
+  // ----------------------------------------------------- Part 2: content (OTA)
+
+  /**
+   * Fetches a content bundle if one is genuinely newer than what is on the
+   * phone, and activates it for the next launch.
+   *
+   * SILENT BY DESIGN
+   * ----------------
+   * This is the BandLab-style part: no dialog, no "an update is available",
+   * no interruption. The user opens the app one day and a fix that shipped as
+   * a 40 KB bundle is simply there.
+   *
+   * What it will NOT do: reload the UI underneath the user. Swapping files
+   * mid-session leaves half the screen on old code, and any in-flight request
+   * would read a file that just changed. The new content goes live at the next
+   * cold start, where {@code AssetRouter} picks it up before the WebView loads.
+   *
+   * Everything here is best-effort: a failed content update must be invisible.
+   * The app keeps running on the content it already has.
+   *
+   * @param bundle the parsed bundle section of version.json, or null
+   * @param interactive true when the user explicitly asked (shows errors)
+   */
+  async function maybeUpdateBundle(bundle, interactive) {
+    if (!bundle) return null;
+    const p = plugin();
+    if (!p || typeof p.updateBundle !== "function") return null;
+
+    // What is already installed, so an old bundle is never re-downloaded.
+    let installed = null;
+    try {
+      if (typeof p.getBundleInfo === "function") installed = await p.getBundleInfo();
+    } catch (e) { /* treat as none */ }
+
+    if (!shouldUpdateBundle(bundle, installed, false)) {
+      return { updated: false, reason: "current", installed };
+    }
+
+    // A bundle is only worth downloading on a connection that can take it.
+    // navigator.connection is not on every WebView; absence means "unknown".
+    try {
+      const conn = window.navigator && window.navigator.connection;
+      if (conn && conn.saveData) {
+        return { updated: false, reason: "save-data", installed };
+      }
+    } catch (e) {}
+
+    state.bundle = state.bundle || { status: "idle" };
+    state.bundle.status = "downloading";
+    state.bundle.version = bundle.version;
+    emit();
+
+    // Progress is reported so Settings can show it, but nothing is blocked on
+    // it and no panel opens.
+    wireBundleProgress(p);
+
+    try {
+      const res = await p.updateBundle({
+        url: bundle.url,
+        version: bundle.version,
+        sha256: bundle.sha256 || ""
+      });
+      state.bundle.status = "ready";
+      state.bundle.version = bundle.version;
+      state.bundle.pendingRestart = true;
+      emit();
+      return { updated: true, version: bundle.version, state: res, installed };
+    } catch (e) {
+      state.bundle.status = "error";
+      state.bundle.message = String((e && e.message) || e);
+      emit();
+      if (interactive) {
+        state.message = "The content update could not be installed: " + state.bundle.message;
+        emit();
+      }
+      return { updated: false, reason: "failed", error: state.bundle.message };
+    }
+  }
+
+  let bundleProgressWired = false;
+  function wireBundleProgress(p) {
+    if (bundleProgressWired || !p || typeof p.addListener !== "function") return;
+    bundleProgressWired = true;
+    try {
+      p.addListener("bundleDownloadProgress", info => {
+        state.bundle = state.bundle || {};
+        state.bundle.progress = {
+          received: Number(info && info.received) || 0,
+          total: info && info.total != null ? Number(info.total) : -1,
+          percent: info && info.percent != null ? Number(info.percent) : -1
+        };
+        emit();
+      });
+    } catch (e) { /* the update still works without progress */ }
+  }
+
+  /**
+   * Cleans up the update files, and says what it reclaimed.
+   *
+   * Called at three moments:
+   *   • right after the installed version is seen to equal or exceed the one
+   *     that was downloaded (Android's installer finished, we came back up)
+   *   • when the panel is dismissed without updating
+   *   • on startup, via the native sweep in MainActivity
+   */
+  async function cleanupFiles(silent) {
+    const p = plugin();
+    if (!p || typeof p.cleanup !== "function") return { files: 0, bytes: 0 };
+    try {
+      const res = await p.cleanup();
+      const files = Number(res && res.files) || 0;
+      if (files > 0 && !silent) {
+        const mb = ((Number(res.bytes) || 0) / (1024 * 1024)).toFixed(1);
+        // No toast here on purpose: update.js must not depend on app.js's UI
+        // helpers, and this file's own message channel already renders.
+        state.message = "Cleared " + files + " leftover update file" + (files === 1 ? "" : "s") + " (" + mb + " MB).";
+        emit();
+      }
+      return { files, bytes: Number(res && res.bytes) || 0 };
+    } catch (e) {
+      return { files: 0, bytes: 0 };
+    }
+  }
+
+  /**
+   * The guarantee behind "0 MB wasted": once the app that is running is at
+   * least as new as the file we downloaded, that file is dead weight.
+   *
+   * This covers the case the startup sweep cannot: the installer finished and
+   * relaunched the app within the same session, so no fresh launch happened.
+   */
+  async function dropStaleDownload() {
+    const p = plugin();
+    if (!p || typeof p.getStorageInfo !== "function") return false;
+    try {
+      const info = await p.getStorageInfo();
+      if (!info || !info.apkExists) return false;
+      // Something is sitting in the cache. If we are no longer being offered an
+      // update — i.e. the installed code matches what we downloaded — it is
+      // already installed and can go.
+      if (state.update && isNewer(state.update, state.installed)) return false;
+      await cleanupFiles(true);
+      return true;
+    } catch (e) {
+      return false;
+    }
   }
 
   // -------------------------------------------------------------------- panel
@@ -479,6 +699,12 @@
     if (forced && fromUser && state.status !== "ready") return;
     panel.classList.remove("open");
     if (fromUser && !forced) snooze();
+    // The user declined for now. If a download was started and stopped, the
+    // file is useless until they tap Update again; deleting it here is what
+    // stops a dismissed panel from leaving an APK in the cache for days.
+    if (fromUser && state.status !== "downloading" && state.status !== "installing") {
+      cleanupFiles(true);
+    }
   }
 
   /** One render function for every state, so the panel never drifts. */
@@ -582,7 +808,10 @@
 
       let res;
       try {
-        res = await p.downloadApk({ url: state.update.apkUrl, fileName: "RegisterBook-update.apk" });
+        // No fileName: the native side always writes cache/updates/update.apk.
+        // Letting JavaScript name the file is what used to allow a second copy
+        // (update(1).apk) to accumulate.
+        res = await p.downloadApk({ url: state.update.apkUrl });
       } catch (e) {
         state.status = "available";
         state.message = friendlyDownloadError((e && e.message) || e);
@@ -602,6 +831,16 @@
 
       // ---- 3. hand it to the Android installer ----------------------------
       await install(p, res.path);
+
+      // ---- 4. clean up ----------------------------------------------------
+      // installApk now resolves only when the installer activity has finished,
+      // so by here we know the outcome. If the user cancelled, the native side
+      // has already deleted the file; this also covers a completed install and
+      // makes the reclaimed space visible.
+      if (state.status !== "installing") {
+        await cleanupFiles(true);
+        state.status = "available";
+      }
     } finally {
       state.busy = false;
     }
@@ -644,10 +883,20 @@
         return;
       }
       if (res && res.installed) {
-        // The system installer is now on screen. Nothing more to do here; the
-        // app is replaced underneath us once the user taps Install.
-        state.status = "installing";
-        state.message = "Follow the installer on screen. The app will restart when it finishes.";
+        // The installer finished and the user went through with it. Android
+        // normally restarts the process, so reaching here means the upgrade set
+        // us back up; the new APK is in place and our copy is gone.
+        state.status = "ready";
+        state.message = "Update installed.";
+        cleanupFiles(true);
+        renderPanel();
+        return;
+      }
+      if (res && res.cancelled) {
+        // The user changed their mind, or the install failed. The native side
+        // deleted the file already, so the cache is clean; say so plainly.
+        state.status = "available";
+        state.message = "Update cancelled. The downloaded file was removed.";
         renderPanel();
         return;
       }
@@ -705,7 +954,11 @@
             clearSnooze();
             state.message = "Allowed. Tap Update to continue.";
             if (state.status === "ready" && state.downloadedPath) await install(p, state.downloadedPath);
-            else if (state.status === "available") openPanel();
+            else if (state.status === "available") {
+              // Resume the original one-tap request after Android's required
+              // settings detour; do not make the user tap Update a second time.
+              await startUpdate();
+            }
             renderPanel();
           }
         } catch (e) {}
@@ -739,7 +992,42 @@
       wireProgressListener(p);
       wireResume();
       // Let the app finish booting before spending bandwidth on a check.
-      setTimeout(() => { check({ manual: false }).catch(() => {}); }, 2500);
+      setTimeout(() => {
+        // Startup housekeeping first: if the previous run left an APK behind
+        // (an install that completed, or a panel the user swiped away), it goes
+        // now rather than sitting in the cache for days.
+        dropStaleDownload()
+          .catch(() => {})
+          .then(() => check({ manual: false }))
+          .catch(() => {});
+      }, 2500);
+    },
+
+    // ---- Part 2, exposed for Settings and tests --------------------------
+    /** The content version installed on this phone, or { active:false }. */
+    async bundleInfo() {
+      const p = plugin();
+      if (!p || typeof p.getBundleInfo !== "function") return { active: false };
+      try { return await p.getBundleInfo(); } catch (e) { return { active: false }; }
+    },
+    /** Force a content update check now (used by "Check for updates"). */
+    async updateContent() {
+      const res = await fetchJson(manifestUrl());
+      if (!res.ok) return { ok: false, reason: res.reason };
+      const parsed = parseManifest(res.json);
+      if (!parsed.ok) return { ok: false, reason: parsed.reason };
+      if (!parsed.update.bundle) return { ok: true, updated: false, reason: "no-bundle" };
+      return maybeUpdateBundle(parsed.update.bundle, true);
+    },
+    /** Delete every leftover update file and report what was reclaimed. */
+    async clearUpdateFiles() {
+      return cleanupFiles(false);
+    },
+    /** Throw away downloaded content and go back to the files inside the APK. */
+    async resetContent() {
+      const p = plugin();
+      if (!p || typeof p.resetBundle !== "function") return { ok: false };
+      try { return await p.resetBundle(); } catch (e) { return { ok: false, reason: String(e && e.message) }; }
     },
     onChange(fn) {
       if (typeof fn === "function") window.RBUpdater._listeners.push(fn);

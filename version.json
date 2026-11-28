@@ -4,5 +4,9 @@
   "title": "Update to the latest version",
   "changelog": "Bug fixes, faster performance, and new features.",
   "apk_url": "https://github.com/Mahicouragw/Register-book/releases/download/apk-latest/RegisterBook.apk",
+  "bundle_url": "https://github.com/Mahicouragw/Register-book/releases/download/apk-latest/bundle.zip",
+  "bundle_version": 11,
+  "bundle_sha256": "71fb0913aafeaee65e10f81ffa9de5d671b7d16f362872d8181acf37e011f021",
+  "bundle_notes": "Content update 11",
   "force_update": false
 }
