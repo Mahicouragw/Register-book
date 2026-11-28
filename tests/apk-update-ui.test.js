@@ -62,7 +62,7 @@ const plugin = {
     if (downloadProgress.total < 0) {
       downloadProgress = { received: 2000, total: 2000, percent: 100 };
     }
-    return { path: "/data/user/0/com.registerbook.community/cache/apk/RegisterBook-update.apk", bytes: 2000, fileName: "RegisterBook-update.apk" };
+    return { path: "/data/user/0/com.registerbook.community/cache/updates/update.apk", bytes: 2000, fileName: "update.apk" };
   },
   async installApk(opts) {
     calls.push("installApk:" + opts.path);
@@ -130,9 +130,9 @@ test("the update flow works end to end against a fake device", async () => {
   await new Promise(r => setTimeout(r, 80));
   check("downloads after permission", calls.some(c => c.startsWith("downloadApk:")), calls.join(","));
   check("hands the file to the installer", calls.some(c => c.startsWith("installApk:")), calls.join(","));
-  check("installer path is the downloaded file", calls.some(c => c.includes("/cache/apk/RegisterBook-update.apk")));
+  check("installer path is the downloaded file", calls.some(c => c.includes("/cache/updates/update.apk")));
   check("progress reached 100%", U.state.progress.percent === 100, JSON.stringify(U.state.progress));
-  check("user is told to follow the installer", /installer/i.test(window.document.getElementById("updateMsg").textContent),
+  check("installer result is reported", /installed/i.test(window.document.getElementById("updateMsg").textContent),
     window.document.getElementById("updateMsg").textContent);
 
   // 5. equal version → no panel (the bug the tests caught earlier)

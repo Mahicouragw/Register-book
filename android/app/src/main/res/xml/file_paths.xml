@@ -1,21 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!--
-  Paths the FileProvider may hand out as content:// URIs.
-
-  registerbook community — used for two things:
-
-    apk_updates   getCacheDir()/apk
-                  Where ApkUpdaterPlugin downloads the self-update .apk.
-                  The Android package installer reads it through this URI.
-                  Only the app's own cache is exposed (never external storage),
-                  so a downloaded update cannot be read by other apps.
-
-    my_cache_images / my_images
-                  Kept from the original Capacitor template — the share
-                  sheet and photo picking use them.
--->
 <paths xmlns:android="http://schemas.android.com/apk/res/android">
-    <cache-path name="apk_updates" path="apk/" />
+    <!-- APK is private at cacheDir/updates/update.apk; only update files are exposed. -->
+    <cache-path name="apk_updates" path="updates/" />
     <cache-path name="my_cache_images" path="." />
     <external-path name="my_images" path="." />
 </paths>

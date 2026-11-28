@@ -186,9 +186,18 @@ jobs:
           echo "version_name=$VNAME" >> "$GITHUB_OUTPUT"
           echo "APK says: $VNAME (code $VCODE)"
 
+      # Build the independent OTA bundle from the same source revision. Its
+      # version advances monotonically with CI so phones can silently adopt it.
+      - name: Build OTA content bundle
+        id: bundle
+        run: |
+          node tools/make-bundle.js --out . --version "${{ github.run_number }}"
+          node -e 'const r=require("./tools/make-bundle.js").build({outDir:".",version:Number(process.env.BUNDLE_VERSION)}); console.log("bundle_sha256="+r.sha256)' >> "$GITHUB_OUTPUT"
+        env:
+          BUNDLE_VERSION: ${{ github.run_number }}
+
       # version.json is what the installed app downloads to learn that a newer
-      # build exists. Generating it from the APK means publishing a release and
-      # announcing it can never drift apart.
+      # build or content bundle exists. APK and bundle versions remain separate.
       - name: Write version.json (what the in-app updater reads)
         run: |
           node -e '
@@ -201,6 +210,9 @@ jobs:
               title: "Update to the latest version",
               changelog: "Bug fixes, faster performance, and new features.",
               apk_url: "https://github.com/Mahicouragw/Register-book/releases/download/apk-latest/RegisterBook.apk",
+              bundle_url: "https://github.com/Mahicouragw/Register-book/releases/download/apk-latest/bundle.zip",
+              bundle_version: Number(process.env.BUNDLE_VERSION),
+              bundle_sha256: process.env.BUNDLE_SHA256,
               force_update: false
             };
             fs.writeFileSync("version.json", JSON.stringify(manifest, null, 2) + "\n");
@@ -209,6 +221,8 @@ jobs:
         env:
           VERSION_NAME: ${{ steps.apkver.outputs.version_name }}
           VERSION_CODE: ${{ steps.apkver.outputs.version_code }}
+          BUNDLE_VERSION: ${{ github.run_number }}
+          BUNDLE_SHA256: ${{ steps.bundle.outputs.bundle_sha256 }}
 
       # Commit version.json back to main only when it actually changed, so the
       # published manifest always points at the newest APK. The [skip ci] tag
@@ -242,10 +256,13 @@ jobs:
           if-no-files-found: error
 
       # This is what the owner taps: a normal .apk download link.
-      - name: Publish as a GitHub Release
+      - name: Publish APK and OTA bundle as a GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: apk-latest
+          files: |
+            RegisterBook.apk
+            bundle.zip
           name: RegisterBook APK (latest)
           body: |
             **RegisterBook — install this file on your phone.**

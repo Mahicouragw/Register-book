@@ -84,7 +84,7 @@ test("bad manifests are rejected with a readable reason, never thrown", () => {
     [{ version_name: "abc", version_code: 2, apk_url: "https://x/y.apk" }, /not a version number/],
     [{ version_name: "1.0.2", apk_url: "https://x/y.apk" }, /version_code/],
     [{ version_name: "1.0.2", version_code: 1.5, apk_url: "https://x/y.apk" }, /whole number/],
-    [{ version_name: "1.0.2", version_code: 2 }, /apk_url is missing/],
+
     // plain http would let the APK be swapped in transit
     [{ version_name: "1.0.2", version_code: 2, apk_url: "http://x/y.apk" }, /https/],
     [{ version_name: "1.0.2", version_code: 2, apk_url: "https://x/y.zip" }, /\.apk/]
@@ -163,8 +163,8 @@ test("the manifest declares everything the installer needs", () => {
 
 test("file_paths.xml exposes the update cache folder", () => {
   const paths = read("android/app/src/main/res/xml/file_paths.xml");
-  // the plugin downloads to getCacheDir()/apk
-  assert.match(paths, /<cache-path[^>]*name="apk_updates"[^>]*path="apk\/"/);
+  // the plugin downloads to the private cacheDir/updates/update.apk
+  assert.match(paths, /<cache-path[^>]*name="apk_updates"[^>]*path="updates\/"/);
   // the pre-existing image paths must not be dropped
   assert.match(paths, /name="my_cache_images"/);
 });
@@ -209,14 +209,15 @@ test("the installer intent is configured correctly for Android 7+", () => {
   assert.match(java, /startsWith\("https:\/\/"\)/);
 });
 
-test("the plugin refuses unsafe file names and truncated downloads", () => {
+test("the plugin uses one fixed private APK path and rejects truncated downloads", () => {
   const java = read("android/app/src/main/java/com/registerbook/community/ApkUpdaterPlugin.java");
-  // a caller-supplied name must not be able to escape the cache dir
-  assert.match(java, /sanitizeFileName/);
-  assert.match(java, /lastIndexOf\('\/'\)/);
-  // a short transfer must never be handed to the installer
+  const store = read("android/app/src/main/java/com/registerbook/community/UpdateStore.java");
+  assert.match(store, /APK_NAME\s*=\s*"update\.apk"/);
+  assert.match(store, /new File\(apkDir\(cacheDir\), APK_NAME\)/);
+  assert.doesNotMatch(java, /sanitizeFileName|call\.getString\("fileName"\)/);
   assert.match(java, /received != total/);
   assert.match(java, /\.part/);
+  assert.match(java, /UpdateStore\.apkFile/);
 });
 
 // ------------------------------------------------------- JavaScript wiring
@@ -327,4 +328,101 @@ test("an older APK running this page degrades gracefully, never silently", () =>
   assert.match(js, /typeof p\.canInstallPackages !== "function"/);
   // and the user is told what to do instead of seeing a dead button
   assert.match(js, /cannot install updates by itself/);
+});
+
+test("bundle-only manifests are accepted and bundle versions compare independently", () => {
+  const res = L.parseManifest({
+    version_name: "1.0.11",
+    version_code: 11,
+    bundle_url: "https://example.com/content.zip",
+    bundle_version: 12,
+    bundle_sha256: "a".repeat(64)
+  });
+  assert.equal(res.ok, true, res.reason);
+  assert.equal(res.update.apkUrl, "");
+  assert.deepEqual(res.update.bundle, {
+    url: "https://example.com/content.zip",
+    version: 12,
+    sha256: "a".repeat(64),
+    notes: ""
+  });
+  assert.equal(L.shouldUpdateBundle(res.update.bundle, { active: true, version: 11 }, false), true);
+  assert.equal(L.shouldUpdateBundle(res.update.bundle, { active: true, version: 12 }, false), false);
+  assert.equal(L.shouldUpdateBundle(res.update.bundle, { active: true, version: 20 }, false), false);
+  assert.equal(L.shouldUpdateBundle(res.update.bundle, { active: true, version: 11 }, true), false);
+});
+
+test("bundle validation rejects unsafe URLs and malformed hashes without breaking APK-only manifests", () => {
+  assert.equal(L.parseBundle({ bundle_url: "http://example.com/bundle.zip", bundle_version: 1 }), null);
+  assert.equal(L.parseBundle({ bundle_url: "https://example.com/bundle.exe", bundle_version: 1 }), null);
+  assert.equal(L.parseBundle({ bundle_url: "https://example.com/bundle.zip", bundle_version: 0 }), null);
+  const malformedHash = L.parseBundle({
+    bundle_url: "https://example.com/bundle.zip", bundle_version: 1, bundle_sha256: "xyz"
+  });
+  assert.equal(malformedHash.sha256, "");
+  assert.equal(L.parseManifest({ version_name: "1.0.11", version_code: 11, apk_url: "https://e.com/a.apk" }).update.bundle, null);
+});
+
+test("native startup, atomic OTA storage, and boot guard are wired before WebView creation", () => {
+  const main = read("android/app/src/main/java/com/registerbook/community/MainActivity.java");
+  const store = read("android/app/src/main/java/com/registerbook/community/UpdateStore.java");
+  const router = read("android/app/src/main/java/com/registerbook/community/AssetRouter.java");
+  assert.ok(main.indexOf("sweepUpdateFiles()") < main.indexOf("super.onCreate("));
+  assert.ok(main.indexOf("bridgeBuilder.setRouteProcessor(router)") < main.indexOf("super.onCreate("));
+  assert.match(main, /deleteAllApks\(getCacheDir\(\)\)/);
+  assert.match(main, /onPageLoaded/);
+  assert.match(store, /cacheDir\/updates\/update\.apk/);
+  assert.match(store, /bundleNext/);
+  assert.match(store, /unzip\(/);
+  assert.match(router, /MAX_BOOT_ATTEMPTS/);
+  assert.match(read("android/app/src/main/java/com/registerbook/community/BundleManager.java"), /activatePending/);
+  assert.match(read("android/app/src/main/java/com/registerbook/community/BundleManager.java"), /next launch/);
+  assert.match(router, /RouteProcessor/);
+  assert.match(router, /getCanonicalPath/);
+});
+
+test("bundle build is valid, reproducible, and hash-compatible with Android", () => {
+  const os = require("os");
+  const crypto = require("crypto");
+  const { build } = require(path.join(ROOT, "tools/make-bundle.js"));
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "rb-bundle-test-"));
+  try {
+    const aDir = path.join(tmp, "a");
+    const bDir = path.join(tmp, "b");
+    const a = build({ outDir: aDir, version: 91 });
+    const b = build({ outDir: bDir, version: 91 });
+    assert.deepEqual(fs.readFileSync(a.zipPath), fs.readFileSync(b.zipPath), "zip bytes are deterministic");
+
+    const entries = a.files.map(name => ({ name, bytes: fs.readFileSync(path.join(ROOT, name)) }));
+    const javaAlgorithm = crypto.createHash("sha256");
+    for (const entry of entries) {
+      const fileHash = crypto.createHash("sha256").update(entry.bytes).digest("hex");
+      javaAlgorithm.update(Buffer.from(entry.name, "utf8"));
+      javaAlgorithm.update(Buffer.from([0]));
+      javaAlgorithm.update(Buffer.from(fileHash, "utf8"));
+      javaAlgorithm.update(Buffer.from("\n", "utf8"));
+    }
+    assert.equal(a.sha256, javaAlgorithm.digest("hex"));
+    assert.match(a.sha256, /^[a-f0-9]{64}$/);
+    assert.ok(a.files.includes("index.html"));
+    assert.ok(!a.files.includes("rb-build.js"));
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("Java source has balanced braces/parens and update workflow publishes both artifacts", () => {
+  const { balance } = require(path.join(ROOT, "tests/helpers/java-syntax.js"));
+  const javaDir = path.join(ROOT, "android/app/src/main/java/com/registerbook/community");
+  for (const file of fs.readdirSync(javaDir).filter(name => name.endsWith(".java"))) {
+    const result = balance(fs.readFileSync(path.join(javaDir, file), "utf8"));
+    assert.equal(result.depth, 0, file + " braces");
+    assert.equal(result.paren, 0, file + " parentheses");
+    assert.deepEqual(result.negatives, [], file + " has no premature closing tokens");
+  }
+  const workflow = read(".github/workflows/build-apk.yml");
+  assert.match(workflow, /bundle_url:/);
+  assert.match(workflow, /bundle_version:/);
+  assert.match(workflow, /bundle_sha256:/);
+  assert.match(workflow, /bundle\.zip/);
 });
