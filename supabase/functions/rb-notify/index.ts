@@ -1,8 +1,8 @@
-// GENERATED FILE — do not edit by hand.
+// GENERATED FILE - do not edit by hand.
 // Source: supabase/functions/src/rb-notify.ts
 // Rebuild with:  npm run build:functions
 
-// rb-notify — the ONLY place that writes an rb_notifications row and the only
+// rb-notify - the ONLY place that writes an rb_notifications row and the only
 // place that sends a real web push.
 //
 // Security model
@@ -15,9 +15,9 @@
 //    the call must be one they placed.
 // 3. Only then does it look up the recipient's push subscriptions and send.
 //
-// Secrets (set in Supabase → Edge Functions → Secrets, never in Git):
+// Secrets (set in Supabase -> Edge Functions -> Secrets, never in Git):
 //   RB_VAPID_PUBLIC_KEY    the public half of the VAPID pair (also in config.js)
-//   RB_VAPID_PRIVATE_KEY   the private half — server side only
+//   RB_VAPID_PRIVATE_KEY   the private half - server side only
 //   RB_VAPID_SUBJECT       optional, defaults to a mailto for this app
 //   RB_FCM_SERVICE_ACCOUNT the Firebase service-account JSON (for the Android
 //                          app's real push). Optional: without it, only the
@@ -25,24 +25,24 @@
 //
 // SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are provided by the platform.
 //
-// Deploy: see README.md → "Edge Functions".
+// Deploy: see README.md -> "Edge Functions".
 
 import { createClient } from "npm:@supabase/supabase-js@2";
 // ---- inlined from supabase/functions/_shared/webpush.js ----
-// webpush.js — Web Push in pure WebCrypto. No dependencies at all.
+// webpush.js - Web Push in pure WebCrypto. No dependencies at all.
 //
 // Implements:
-//   • RFC 8291  — Message Encryption for Web Push (aes128gcm)
-//   • RFC 8292  — VAPID (ES256 JWT in the Authorization header)
+//   * RFC 8291  - Message Encryption for Web Push (aes128gcm)
+//   * RFC 8292  - VAPID (ES256 JWT in the Authorization header)
 //
 // Written against the standard, byte-for-byte compatible with the widely used
 // `web-push` npm package (verified in tests/webpush-crypto.test.js, which
 // decrypts our output with http_ece and verifies our JWT with Node's crypto).
 //
 // It only uses WebCrypto, so the same file runs in:
-//   • Deno / Supabase Edge Functions  (imported by rb-notify)
-//   • Node 18+                        (imported by the test suite)
-// A future Flutter app would not need this file — it uses FCM natively.
+//   * Deno / Supabase Edge Functions  (imported by rb-notify)
+//   * Node 18+                        (imported by the test suite)
+// A future Flutter app would not need this file - it uses FCM natively.
 
 const enc = new TextEncoder();
 
@@ -110,7 +110,7 @@ async function hkdf(salt, ikm, info, len) {
 
 // ------------------------------------------------------------------ VAPID (RFC 8292)
 // The private key is stored as the raw 32-byte scalar (base64url) and the
-// public key as the 65-byte uncompressed point (base64url) — exactly the pair
+// public key as the 65-byte uncompressed point (base64url) - exactly the pair
 // `webpush.generateVAPIDKeys()` produces.
 function vapidJwk(privateKeyB64Url, publicKeyB64Url) {
   const pub = b64UrlDecode(publicKeyB64Url);
@@ -176,7 +176,7 @@ const PAD_LENGTH = 1;
 
 /**
  * Encrypts a payload for one push subscription.
- * Returns { body: Uint8Array, contentEncoding } — `body` goes straight to fetch().
+ * Returns { body: Uint8Array, contentEncoding } - `body` goes straight to fetch().
  */
 async function encryptAes128Gcm(subscription, payloadText, salt, keyPair) {
   const uaPublic = b64UrlDecode(subscription.keys.p256dh);
@@ -239,7 +239,7 @@ async function encryptAes128Gcm(subscription, payloadText, salt, keyPair) {
 
 /**
  * Builds everything needed to POST one push message.
- * Returns { endpoint, headers, body } — ready for fetch().
+ * Returns { endpoint, headers, body } - ready for fetch().
  */
 async function buildPushRequest(subscription, payloadText, options) {
   const opts = options || {};
@@ -283,19 +283,19 @@ async function buildPushRequest(subscription, payloadText, options) {
 
 // ---- end of supabase/functions/_shared/webpush.js ----
 // ---- inlined from supabase/functions/_shared/fcm.js ----
-// fcm.js — Firebase Cloud Messaging (FCM) HTTP v1 sender, in pure WebCrypto.
+// fcm.js - Firebase Cloud Messaging (FCM) HTTP v1 sender, in pure WebCrypto.
 //
 // The installed website (PWA) uses Web Push (webpush.js). The Android app
-// (Capacitor WebView) has no PushManager, so it uses FCM instead — this is
+// (Capacitor WebView) has no PushManager, so it uses FCM instead - this is
 // the server half: it signs a JWT with the Firebase service-account key,
 // exchanges it for an OAuth access token, and POSTs the message to FCM.
 //
 // No dependencies at all. Only WebCrypto, so the same file runs in:
-//   • Deno / Supabase Edge Functions  (imported by rb-notify)
-//   • Node 18+                        (imported by the test suite)
+//   * Deno / Supabase Edge Functions  (imported by rb-notify)
+//   * Node 18+                        (imported by the test suite)
 //
 // The service-account JSON is a Supabase secret called RB_FCM_SERVICE_ACCOUNT
-// (set by the owner in the Supabase dashboard — never in Git).
+// (set by the owner in the Supabase dashboard - never in Git).
 //
 // NOTE: every top-level name here is prefixed `fcm` on purpose. The build
 // script inlines this file into rb-notify/index.ts alongside webpush.js, and
@@ -325,7 +325,7 @@ function fcmB64UrlDecode(value) {
   return out;
 }
 
-// ------------------------------------------------------------------ PEM → key
+// ------------------------------------------------------------------ PEM -> key
 // A Firebase service-account private key is a PEM block ("-----BEGIN PRIVATE
 // KEY-----..."). WebCrypto wants the raw PKCS#8 DER bytes.
 function pemToDer(pem) {
@@ -402,7 +402,7 @@ async function getAccessToken(serviceAccount, opts) {
 // ------------------------------------------------------------------ send
 // Sends one notification to one FCM registration token.
 // Returns { ok: true } or { ok: false, gone: true } for a dead token
-// (FCM answers 404 / UNREGISTERED — the caller deletes the row).
+// (FCM answers 404 / UNREGISTERED - the caller deletes the row).
 async function sendFcmMessage(serviceAccount, accessToken, message, opts) {
   const o = opts || {};
   const sa = serviceAccount || {};
@@ -449,12 +449,12 @@ async function sendFcmMessage(serviceAccount, accessToken, message, opts) {
 
 // ---- end of supabase/functions/_shared/fcm.js ----
 // ---- inlined from notify.js ----
-// notify.js — the exact wording of every push notification, in one place.
+// notify.js - the exact wording of every push notification, in one place.
 //
 // Pure functions, no DOM, no network. Used by:
-//   • the browser (window.RBNotifyText) to preview a notification,
-//   • the rb-notify Edge Function (identical wording, imported copy),
-//   • the automated tests (require("./notify.js")) so the wording is locked in.
+//   * the browser (window.RBNotifyText) to preview a notification,
+//   * the rb-notify Edge Function (identical wording, imported copy),
+//   * the automated tests (require("./notify.js")) so the wording is locked in.
 //
 // Flutter can reuse the same strings later; nothing here is web-specific.
 (function () {
@@ -483,7 +483,7 @@ async function sendFcmMessage(serviceAccount, accessToken, message, opts) {
   function clip(text, max) {
     const s = String(text == null ? "" : text).replace(/\s+/g, " ").trim();
     const n = max || 60;
-    return s.length > n ? s.slice(0, n - 1) + "…" : s;
+    return s.length > n ? s.slice(0, n - 1) + "..." : s;
   }
 
   // The notification types. `actions` are the buttons shown on the phone
@@ -524,7 +524,7 @@ async function sendFcmMessage(serviceAccount, accessToken, message, opts) {
         return {
           type: "invite",
           title: `You're invited to ${group}`,
-          body: e.text ? clip(e.text) : `${who} invited you to join “${group}”.`,
+          body: e.text ? clip(e.text) : `${who} invited you to join "${group}".`,
           actions: [
             { action: "join", title: "Join" },
             { action: "decline", title: "Decline" }
@@ -551,7 +551,7 @@ async function sendFcmMessage(serviceAccount, accessToken, message, opts) {
         return {
           type: "qbook",
           title: `${who} sent you a question book`,
-          body: e.text ? `“${clip(e.text)}” — tap to open and answer it.` : "Tap to open and answer it.",
+          body: e.text ? `"${clip(e.text)}" - tap to open and answer it.` : "Tap to open and answer it.",
           actions: [{ action: "open", title: "Open" }],
           tag: "rb-qbook",
           renotify: true
@@ -561,7 +561,7 @@ async function sendFcmMessage(serviceAccount, accessToken, message, opts) {
         return {
           type: "qbook_done",
           title: `${who} returned a completed question book`,
-          body: e.text ? `“${clip(e.text)}” — tap to read the answers.` : "Tap to read the answers.",
+          body: e.text ? `"${clip(e.text)}" - tap to read the answers.` : "Tap to read the answers.",
           actions: [{ action: "open", title: "Open" }],
           tag: "rb-qbook-done",
           renotify: true
@@ -572,7 +572,7 @@ async function sendFcmMessage(serviceAccount, accessToken, message, opts) {
         return {
           type: "system",
           title: e.title || "RegisterBook",
-          body: e.text || "Test notification — if you can read this, push works.",
+          body: e.text || "Test notification - if you can read this, push works.",
           actions: [{ action: "open", title: "Open" }],
           tag: "rb-system",
           renotify: false
@@ -608,7 +608,7 @@ async function sendFcmMessage(serviceAccount, accessToken, message, opts) {
 // deno-lint-ignore no-explicit-any
 const NT = (globalThis as unknown as { RBNotifyText: any }).RBNotifyText;
 
-// CORS — every response needs these, not just the preflight.
+// CORS - every response needs these, not just the preflight.
 //
 // The app runs inside the Android WebView, whose origin is https://localhost
 // (the website is https://mahicouragw.github.io). Without
@@ -679,7 +679,7 @@ Deno.serve(async (req: Request) => {
   let data: Record<string, string> = {};
 
   if (type === "system") {
-    // a test notification to yourself — always allowed
+    // a test notification to yourself - always allowed
     recipientId = uid;
     title = String(ev.title || "RegisterBook test");
     body = String(ev.text || "If you can read this, push notifications work.");
@@ -729,7 +729,7 @@ Deno.serve(async (req: Request) => {
     if (row.status !== "pending") return fail(409, "That invite is no longer pending.");
     if (!row.invited_user_id) {
       // a link with no named person: nobody to push to yet
-      return json({ ok: true, delivered: 0, note: "Open invite link — no named recipient to push to." });
+      return json({ ok: true, delivered: 0, note: "Open invite link - no named recipient to push to." });
     }
     recipientId = row.invited_user_id;
     const { data: grp } = await admin.from("rb_groups").select("name").eq("id", row.group_id).maybeSingle();
@@ -879,7 +879,7 @@ Deno.serve(async (req: Request) => {
           if (res.ok || res.status === 201) {
             delivered += 1;
           } else if (res.status === 404 || res.status === 410) {
-            // the phone unsubscribed — forget this endpoint
+            // the phone unsubscribed - forget this endpoint
             await admin.from("rb_push_subscriptions").delete().eq("id", sub.id);
             removed += 1;
           } else {
@@ -898,7 +898,7 @@ Deno.serve(async (req: Request) => {
   // PushManager, so it registers an FCM token instead (rb_fcm_tokens).
   // Both paths run, so a person with both the website and the app installed
   // gets the notification on each. Without the service-account secret this
-  // whole block is skipped — Web Push still works.
+  // whole block is skipped - Web Push still works.
   let fcmDelivered = 0;
   let fcmRemoved = 0;
   if (fcmServiceAccountRaw) {

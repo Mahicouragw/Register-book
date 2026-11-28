@@ -1248,6 +1248,23 @@
     const box = $("#notifBody");
     if (!box) return;
     const P = window.RBPush;
+
+    // Inside the APK, the state comes from Android, not from memory. Draw with
+    // what is known now, then redraw once the phone has answered. Without this
+    // the screen kept showing the state it had at launch - which was always
+    // "off", because the variable behind it started empty every time.
+    const drawnState = P ? P.statusText().state : "unsupported";
+    if (P && typeof P.refreshNativeState === "function" && P.isNative()) {
+      P.refreshNativeState().then(() => {
+        // Redraw only when the phone disagrees with what is on screen. That
+        // ends the loop after one pass and still picks up a change the owner
+        // made in Android Settings while the app was in the background.
+        if (box.isConnected && P.statusText().state !== drawnState) {
+          renderNotificationSettings();
+        }
+      }).catch(() => { /* keep the honest "unknown" paint */ });
+    }
+
     const st = P ? P.statusText() : { state: "unsupported", title: "Notifications are not available", body: "This browser cannot receive web push.", canEnable: false };
     const badge = $("#notifStateBadge");
     if (badge) {
@@ -1322,6 +1339,10 @@
     if (!res.ok) {
       set(res.message || "Could not change notifications.");
       toast(res.message || "Could not change notifications");
+    } else if (res.warning) {
+      // Saying a flat "✓" here would be a lie the owner cannot see the reason
+      // for. The switch did take effect on the phone; the push service did not.
+      set(res.message + " " + res.warning);
     } else {
       set(on ? "Notifications are ON ✓ — press “Send test notification” to prove it." : "Notifications are OFF.");
     }

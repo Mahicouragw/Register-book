@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Tint of the small status-bar icon and of the notification accent.
+         Taken from the app's brand colour (#0f766e in styles.css) so a
+         notification looks like it came from this app. -->
+    <color name="notification_color">#0F766E</color>
+</resources>

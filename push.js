@@ -37,16 +37,137 @@
     } catch (e) {}
     return null;
   }
-  let nativePerm = "default"; // default | granted | denied (Android 13+ prompt)
+  // The Android notification permission.
+  //
+  // This used to be a bare module variable that started at "default" and was
+  // only ever written by requestPermissions(). So every cold start forgot what
+  // the phone had already granted and Settings said "Notifications are off"
+  // again — the app looked like it had switched them off by itself. The real
+  // state only lives in Android, so it must be READ from there on startup.
+  let nativePerm = "default"; // default | granted | denied | unsupported
+
+  // The notification channel id the server sends to.
+  //
+  // On Android 8+ every notification belongs to a channel, and FCM displays a
+  // `notification` payload on the channel named in
+  // android.notification.channel_id. If that channel does not exist, Android
+  // DROPS the notification when the app is closed. Capacitor's plugin never
+  // creates one, so the app must create it itself — with exactly this id.
+  // It must stay in step with rb-notify (see _shared/fcm.js).
+  const CHANNEL_ID = "registerbook_default";
+
+  /**
+   * Creates the notification channel (Android 8+) so a closed-app push is
+   * actually shown. Safe to call repeatedly: createChannel on an existing id is
+   * a no-op in Android, which is also why a channel's importance can never be
+   * raised again after the user lowers it — that is an Android rule we cannot
+   * and should not work around.
+   */
+  let channelReady = false;
+  async function ensureChannel(pn) {
+    if (channelReady || !pn || typeof pn.createChannel !== "function") return;
+    try {
+      await pn.createChannel({
+        id: CHANNEL_ID,
+        name: "Messages and calls",
+        description: "Messages, friend requests, group invites and calls from RegisterBook.",
+        importance: 5, // IMPORTANCE_HIGH — heads-up banner + sound
+        visibility: 1, // VISIBILITY_PUBLIC
+        vibration: true,
+        lights: true
+      });
+      channelReady = true;
+    } catch (e) {
+      // Android < 8 has no channels at all; nothing to do there.
+    }
+  }
+
+  /**
+   * Reads the CURRENT permission from Android.
+   *
+   * Note the platform quirk: Capacitor's checkPermissions() answers "granted"
+   * unconditionally below Android 13 (there is no runtime prompt to inspect
+   * there), so on older phones it cannot tell us that the person switched the
+   * app's notifications off in Settings. We therefore keep "granted" as the
+   * answer but never claim more than we know.
+   */
+  async function syncNativePermission() {
+    if (!isNative()) return nativePerm;
+    const pn = nativePlugin("PushNotifications");
+    if (!pn) { nativePerm = "unsupported"; return nativePerm; }
+    try {
+      if (typeof pn.checkPermissions === "function") {
+        const res = await pn.checkPermissions();
+        const v = (res && (res.receive || res.result)) || "prompt";
+        nativePerm = v === "granted" ? "granted" : v === "denied" ? "denied" : "default";
+      }
+      await ensureChannel(pn);
+    } catch (e) {
+      if (nativePerm === "default") nativePerm = "denied";
+    }
+    return nativePerm;
+  }
+
   async function requestNativePermission() {
     const pn = nativePlugin("PushNotifications");
     if (!pn || typeof pn.requestPermissions !== "function") return "unsupported";
     try {
+      // Create the channel BEFORE asking, so the very first push already has
+      // somewhere to land.
+      await ensureChannel(pn);
       const res = await pn.requestPermissions();
       const v = (res && (res.receive || res.result)) || "denied";
       nativePerm = v === "granted" ? "granted" : v === "denied" ? "denied" : "default";
       return nativePerm;
     } catch (e) { return "denied"; }
+  }
+
+  /**
+   * Startup: read the phone's real notification state and, if it is already
+   * allowed, make sure the server has this device's address.
+   *
+   * Without this the app showed "Notifications are off" on every launch no
+   * matter what the phone had granted, because the only thing it ever looked at
+   * was a variable that began life as "default" and was reset by every restart.
+   *
+   * Never prompts here — asking on launch would be hostile, and Android would
+   * ignore a second prompt anyway. Only a state read.
+   */
+  let initPromise = null;
+  let fcmRegistered = false;
+  async function initNative() {
+    if (!isNative()) return nativePerm;
+    if (initPromise) return initPromise;
+    initPromise = (async () => {
+      await syncNativePermission();
+      if (nativePerm === "granted" && !fcmRegistered) {
+        // Re-register once per launch: FCM rotates tokens, and a device that
+        // was restored from a backup has a token the server never saw.
+        if (firebaseInBuild() && cfg().FCM_ENABLED) {
+          fcmRegistered = true;
+          registerFcm().catch(() => { /* Settings still shows the true state */ });
+        }
+      }
+      return nativePerm;
+    })();
+    return initPromise;
+  }
+
+  /**
+   * Re-reads the phone's answer every time Settings is opened.
+   *
+   * Deliberately not memoised: the owner can go into Android Settings, change
+   * the app's notifications, and come straight back — the screen has to show
+   * the new answer, not the one from launch.
+   */
+  async function refreshNativeState() {
+    if (!isNative()) return nativePerm;
+    await syncNativePermission();
+    if (nativePerm === "granted" && !fcmRegistered && firebaseInBuild() && cfg().FCM_ENABLED) {
+      fcmRegistered = true;
+      registerFcm().catch(() => {});
+    }
+    return nativePerm;
   }
 
   // Real push inside the APK (FCM). The token is saved to rb_fcm_tokens;
@@ -151,13 +272,43 @@
   // A human sentence describing the current state, shown in Settings.
   function statusText() {
     if (isNative()) {
+      // What is actually possible on THIS phone, so the wording never promises
+      // something the build cannot do and never undersells what it can.
+      const pushReady = firebaseInBuild() && !!cfg().FCM_ENABLED;
+      const closedApp = pushReady
+        ? "You will get a banner and a sound even when the app is closed."
+        : "While the app is on screen you get a banner. Notifications delivered by the server while the app is closed need Firebase, which is not configured in this build.";
+
       if (nativePerm === "granted") {
-        return { state: "granted", title: "Notifications are ON", body: "This phone allows RegisterBook notifications. Real push while the app is closed needs Firebase (FCM) — see README. The installed website already delivers real push today.", canEnable: false };
+        return {
+          state: "granted",
+          title: "Notifications are ON",
+          body: "This phone allows RegisterBook notifications. " + closedApp,
+          canEnable: false
+        };
       }
       if (nativePerm === "denied") {
-        return { state: "denied", title: "Notifications are blocked for this app", body: "Open Android Settings → Apps → RegisterBook → Notifications and set it to Allow, then come back here.", canEnable: false };
+        return {
+          state: "denied",
+          title: "Notifications are blocked for this app",
+          body: "Open Android Settings → Apps → RegisterBook → Notifications and set it to Allow, then come back here.",
+          canEnable: false
+        };
       }
-      return { state: "default", title: "Notifications are off", body: "Switch them on to allow RegisterBook notifications on this phone. Real push while the app is closed needs Firebase (FCM) — see README. The installed website already delivers real push today.", canEnable: true };
+      if (nativePerm === "unsupported") {
+        return {
+          state: "unsupported",
+          title: "Notifications are not available in this build",
+          body: "This copy of the app was built without the notification plugin. Install the current version from the download page.",
+          canEnable: false
+        };
+      }
+      return {
+        state: "default",
+        title: "Notifications are off",
+        body: "Switch them on to allow RegisterBook notifications on this phone. " + closedApp,
+        canEnable: true
+      };
     }
     if (!supported()) {
       return {
@@ -227,8 +378,19 @@
       const perm = await requestNativePermission();
       if (perm === "granted") {
         // Real FCM registration only once Firebase is configured.
-        if (cfg().FCM_ENABLED) await registerFcm();
-        return { ok: true, message: "Notifications are ON ✓" };
+        let fcm = { ok: false, reason: "fcm-off" };
+        if (firebaseInBuild() && cfg().FCM_ENABLED) fcm = await registerFcm();
+        if (fcm.ok || fcm.reason === "already-tried") {
+          return { ok: true, message: "Notifications are ON ✓" };
+        }
+        // The phone allows notifications, so say so — but do not pretend the
+        // server can reach this device when registration did not happen.
+        return {
+          ok: true,
+          message: "Notifications are ON for this phone ✓",
+          warning: "This build could not register with the push service (" +
+            (fcm.reason || "unknown") + "), so reminders sent while the app is closed may not arrive."
+        };
       }
       return { ok: false, reason: "not-granted", message: "Permission was not granted. Open Android Settings → Apps → RegisterBook → Notifications and allow it." };
     }
@@ -498,6 +660,7 @@
     // install (what makes push work when the app is closed)
     isInstalled, canPromptInstall, installPlatform, installHowTo, installStatus, promptInstall,
     // Android app (APK)
-    isNative, requestNativePermission, registerFcm
+    isNative, requestNativePermission, registerFcm,
+    initNative, refreshNativeState, syncNativePermission
   };
 })();
