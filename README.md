@@ -428,6 +428,110 @@ automatically (1–2 minutes). Phones running the app update themselves:
 `rb-2026-11-27a` → `rb-2026-11-27b`). That is what makes phones pick up the
 new version. The `tests/auto-update.test.js` suite checks the wiring.
 
+> The section below is about the **website**. The **APK** has its own,
+> separate updater — see [APK self-update](#apk-self-update--no-browser-no-file-hunting).
+
+## APK self-update — no browser, no file hunting
+
+The installed app updates **itself**: it notices a new version, downloads the
+APK inside the app with a progress bar, and opens the Android installer. The
+person never opens a browser or looks for a downloaded file.
+
+```
+ app launch ──► GET version.json ──► newer? ──► panel
+                                                 │
+                                        tap Update
+                                                 ▼
+                          allow install from this app (Android 8+)
+                                                 ▼
+                     download .apk to cache (live %) ──► Android installer
+```
+
+### What you (the owner) do to publish an update
+
+**Normally: nothing.** The build is automatic:
+
+1. Merge any change to `main`.
+2. GitHub Actions builds a signed APK with a **higher `versionCode`**
+   (run number) and publishes it to the
+   [`apk-latest`](https://github.com/Mahicouragw/Register-book/releases/tag/apk-latest)
+   release.
+3. The same run reads the version **out of the built APK** (`aapt2 dump
+   badging`), rewrites `version.json`, and commits it back with `[skip ci]`.
+4. GitHub Pages republishes the site, so `version.json` is live within a
+   minute or two.
+5. Every installed app sees it on its next launch (or via
+   **Settings → App version → Check for updates**).
+
+That is the whole loop. Nothing to edit by hand, and the announced version can
+never drift from the APK that was actually published.
+
+### Only when you want custom release notes
+
+Edit `version.json` on `main` and change `changelog` (and `force_update` if the
+update must not be postponed):
+
+```json
+{
+  "version_name": "1.0.12",
+  "version_code": 12,
+  "title": "Update to the latest version",
+  "changelog": "Fixed the calendar scroll bug.\nFaster photo loading.\nNew: search inside a book.",
+  "apk_url": "https://github.com/Mahicouragw/Register-book/releases/download/apk-latest/RegisterBook.apk",
+  "force_update": false
+}
+```
+
+| field | meaning |
+|---|---|
+| `version_name` | shown in the panel, e.g. `1.0.12` |
+| `version_code` | **the number Android actually compares.** Must be higher than the installed one or the update is skipped |
+| `title` | panel heading (defaults to "Update to the latest version") |
+| `changelog` | one line per bullet; `\n` separates them |
+| `force_update` | `true` = no Later, no ✕ (use only for a security fix) |
+
+> The next automatic build **overwrites** `version.json` with the new version
+> numbers, so a hand-edited `version_code` only lasts until the next build.
+> Keep it equal to whatever that build produces, or simply let CI write it.
+
+### Signing — the one rule that matters
+
+Android only replaces an installed app if the new APK is signed with **the same
+keystore**. If it is not, the installer shows *"App not installed"* and the
+update silently fails.
+
+This repo already handles it: the workflow restores one stable key
+(`rb-signing-key-v1` in the Actions cache) or, if you add them, uses your own
+`KEYSTORE_BASE64` + `KEYSTORE_PASSWORD` repository secrets.
+
+⚠️ **Do not clear the Actions caches, and do not change the signing key**, or
+every installed phone will have to uninstall and reinstall once.
+
+### Where the pieces live
+
+| piece | file |
+|---|---|
+| version check, panel, download flow | `update.js` |
+| native download + installer | `android/app/src/main/java/com/registerbook/community/ApkUpdaterPlugin.java` |
+| `INTERNET` + `REQUEST_INSTALL_PACKAGES` | `android/app/src/main/AndroidManifest.xml` |
+| `FileProvider` cache path (`apk/`) | `android/app/src/main/res/xml/file_paths.xml` |
+| the published manifest | `version.json` |
+| the update URL | `config.js` → `UPDATE_URL` |
+| auto-publishing the manifest | `.github/workflows/build-apk.yml` |
+
+### Honest limits
+
+- **Android 8.0+** shows a one-time "Allow from this source" screen. The app
+  opens that screen for you and continues when you come back — but it is the
+  system's decision, not something the app can grant itself.
+- The Android **installer** always shows its own Install/Update confirmation.
+  No app can install silently; that would be a security hole.
+- On the **website** there is no APK, so this panel never appears there. The
+  service worker above updates the site instead.
+- An **older APK** running the newer web page cannot self-update (its native
+  half has no plugin). It says so and asks for one manual install; every build
+  after that updates itself.
+
 ## Android APK
 
 The app ships as an Android APK built with [Capacitor](https://capacitorjs.com/).
@@ -436,16 +540,22 @@ The APK contains the full website (offline-capable) inside a native shell.
 **How the APK is built (automatic):** the GitHub Actions workflow
 `.github/workflows/build-apk.yml` runs on every push to `main`. It copies the
 website into `www/` (`node tools/prepare-www.js`), syncs it into the Android
-project (`npx cap sync android`), builds a debug APK with Gradle, and uploads
-it as a downloadable artifact.
+project (`npx cap sync android`), builds a **signed release** APK with a
+strictly increasing `versionCode`, and publishes it to the
+[`apk-latest`](https://github.com/Mahicouragw/Register-book/releases/tag/apk-latest)
+release (plus `version.json`, so installed apps find it).
 
-**To download the APK:**
+**To download the APK (first install only):**
 
-1. Open https://github.com/Mahicouragw/Register-book/actions
-2. Click the latest **Build Android APK** run (the newest one on top).
-3. Scroll to **Artifacts** → download **RegisterBook-debug-apk**.
-4. Unzip it and install `app-debug.apk` on your phone (Android will ask to
-   allow installs from your browser once — tap Allow).
+1. Tap **[RegisterBook.apk](https://github.com/Mahicouragw/Register-book/releases/download/apk-latest/RegisterBook.apk)**
+   — a direct `.apk` link, no zip and no artifact page.
+2. Open the downloaded file.
+3. If Android asks, allow "Install unknown apps" for your browser.
+4. Tap **Install**.
+
+Every later update arrives **inside the app** (see
+[APK self-update](#apk-self-update--no-browser-no-file-hunting)) — the browser
+step above is only ever needed the first time.
 
 **Google sign-in inside the APK (opens Chrome, returns to the app):**
 

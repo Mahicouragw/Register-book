@@ -53,6 +53,16 @@ window.RB_CONFIG = {
   // asked. The installed website (PWA) already has real Web Push today.
   FCM_ENABLED: true,
 
+  // ------------------------------------------------------------ Self-update
+  // Where the APK checks for a newer version of itself. This must be a plain
+  // HTTPS URL that returns the JSON shown in version.json.
+  //
+  // GitHub Pages serves the repo root, so publishing a new version.json to
+  // main is enough — no redeploy of the app is needed (see README →
+  // "Publishing an update"). If it is left empty, update.js falls back to the
+  // same file on the site above.
+  UPDATE_URL: "https://mahicouragw.github.io/Register-book/version.json",
+
   // ------------------------------------------------------------ Calling
   // Calls between two phones usually need a TURN relay, because mobile
   // networks and Wi-Fi routers hide phones behind NAT.

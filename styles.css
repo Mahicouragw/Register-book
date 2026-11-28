@@ -496,3 +496,28 @@ code{background:#f3f4f6;padding:1px 6px;border-radius:4px;font-size:12px;word-br
   .btn{border-width:2px}
   .badge{border-width:2px}
 }
+
+/* ---------------------------------------------------------------------------
+   Self-update panel (update.js)
+
+   Its own overlay rather than a variant of .modal, because a forced update
+   must ignore the app's normal "click the backdrop to close" behaviour and
+   must be able to sit above everything else.
+--------------------------------------------------------------------------- */
+.update-card{max-width:480px}
+.update-body{display:flex;flex-direction:column;gap:14px}
+.update-versions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.update-arrow{color:var(--muted);font-weight:800}
+.update-notes{font-size:14px;line-height:1.5;color:var(--ink)}
+.update-list{margin:0;padding-left:20px;display:flex;flex-direction:column;gap:6px}
+.update-list li{font-size:14px}
+.update-progress{display:flex;flex-direction:column;gap:6px}
+.update-bar{height:10px;border-radius:999px;background:#e5e7eb;overflow:hidden}
+.update-fill{height:100%;width:0;border-radius:999px;background:linear-gradient(90deg,var(--brand),var(--brand-2));transition:width .18s ease}
+.update-progress-text{color:var(--muted);font-variant-numeric:tabular-nums}
+.update-msg{color:#b45309}
+.update-msg:empty{display:none}
+.update-foot{padding:12px 16px;border-top:1px solid var(--border);display:flex;gap:8px;justify-content:flex-end;background:#f9fafb}
+.update-foot .btn{min-width:96px}
+/* A forced update cannot be dismissed, so the panel is not click-through. */
+#updatePanel{z-index:70}
