@@ -50,6 +50,11 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 
+    <!-- Self-update: lets the app hand a downloaded .apk to the Android
+         package installer (the in-app "Update" button). Without this the
+         installer sheet refuses to open on Android 8.0+. -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+
     <!-- Calls: microphone + camera (video calls) + audio routing -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.CAMERA" />

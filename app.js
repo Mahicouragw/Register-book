@@ -1116,6 +1116,17 @@
       </div>
 
       <div class="card mt12">
+        <div class="card-head"><h3>App version</h3><span class="badge badge-gray" id="appVersionBadge">…</span></div>
+        <div class="card-pad">
+          <div class="small" id="appVersionText">Checking…</div>
+          <div class="row mt8">
+            <button class="btn btn-sm" id="checkUpdateBtn" onclick="checkForUpdate()">🔄 Check for updates</button>
+          </div>
+          <div class="help-text" id="updateHint"></div>
+        </div>
+      </div>
+
+      <div class="card mt12">
         <div class="card-head"><h3>Legal &amp; help</h3></div>
         <div class="card-pad">
           <div class="row">
@@ -1159,7 +1170,71 @@
       sel.onchange = e => enterDemo(e.target.value);
     }
     renderNotificationSettings();
+    renderAppVersion();
   }
+
+  // Settings → App version. The badge shows the version Android actually has
+  // installed (read from the package manager inside the APK), not the web
+  // bundle, so it is always the truth.
+  async function renderAppVersion() {
+    const badge = $("#appVersionBadge");
+    const text = $("#appVersionText");
+    const hint = $("#updateHint");
+    const btn = $("#checkUpdateBtn");
+    const U = window.RBUpdater;
+    const native = U ? U.isNative() : false;
+
+    if (!U) {
+      if (badge) badge.textContent = "—";
+      if (text) text.textContent = "Update information is unavailable in this build.";
+      if (btn) btn.style.display = "none";
+      return;
+    }
+    if (!native) {
+      // The website updates itself through the service worker, so there is no
+      // APK to install. Showing the APK panel there would be misleading.
+      if (badge) badge.textContent = "Web";
+      if (text) text.textContent = "This is the website build. It updates itself automatically — just reopen it.";
+      if (hint) hint.textContent = "";
+      if (btn) btn.style.display = "none";
+      return;
+    }
+    try {
+      const v = await U.installedVersion();
+      if (badge) badge.textContent = v.versionName || "—";
+      if (text) text.textContent = "Installed: " + U.describeVersion(v.versionName, v.versionCode);
+      if (hint) hint.textContent = "Updates download inside the app and open the Android installer — no browser needed.";
+    } catch (e) {
+      if (badge) badge.textContent = "—";
+      if (text) text.textContent = "Could not read the installed version.";
+    }
+  }
+
+  // Settings → "Check for updates". A manual check always reports a result,
+  // even when there is nothing new (silence would look broken).
+  async function checkForUpdate() {
+    const btn = $("#checkUpdateBtn");
+    const hint = $("#updateHint");
+    const U = window.RBUpdater;
+    if (!U) return;
+    if (btn) { btn.disabled = true; btn.textContent = "⏳ Checking…"; }
+    if (hint) hint.textContent = "";
+    try {
+      const res = await U.check({ manual: true });
+      if (!res || res.ok === false) {
+        if (hint) hint.textContent = (res && res.reason) || "Could not check for updates.";
+      } else if (res.available) {
+        if (hint) hint.textContent = "Version " + res.latest + " is available.";
+      } else {
+        if (hint) hint.textContent = res.message || "You are on the latest version.";
+      }
+    } catch (e) {
+      if (hint) hint.textContent = "Could not check for updates.";
+    } finally {
+      if (btn) { btn.disabled = false; btn.textContent = "🔄 Check for updates"; }
+    }
+  }
+  window.checkForUpdate = checkForUpdate;
 
   // The last message shown under the notification buttons. Kept outside the DOM
   // because renderNotificationSettings() rebuilds that whole block, which would
@@ -2516,6 +2591,11 @@
   async function boot() {
     fillGateChips();
     registerServiceWorker();
+    // Self-update (APK only). init() is a no-op on the website, where the
+    // service worker already handles updates.
+    if (window.RBUpdater) {
+      try { window.RBUpdater.init(); } catch (e) {}
+    }
     const today = $("#todayPreview");
     if (today) today.textContent = fmtFull(new Date());
 

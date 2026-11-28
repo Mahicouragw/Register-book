@@ -19,6 +19,7 @@ const FILES = [
   "rb-build.js",
   "config.js",
   "notify.js",
+  "update.js",
   "auth.js",
   "store.js",
   "qbooks.js",

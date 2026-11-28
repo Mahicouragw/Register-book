@@ -1,0 +1,8 @@
+{
+  "version_name": "1.0.9",
+  "version_code": 9,
+  "title": "Update to the latest version",
+  "changelog": "Bug fixes, faster performance, and new features.",
+  "apk_url": "https://github.com/Mahicouragw/Register-book/releases/download/apk-latest/RegisterBook.apk",
+  "force_update": false
+}

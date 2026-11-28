@@ -8,7 +8,7 @@
  * Network-first for same-origin files, so you always get the newest code when
  * you are online and the cached copy when you are not.
  */
-const VERSION = "rb-2026-11-27c";
+const VERSION = "rb-2026-11-28a";
 const CACHE = "registerbook-" + VERSION;
 
 const SHELL = [
@@ -19,6 +19,7 @@ const SHELL = [
   "./rb-build.js",
   "./config.js",
   "./notify.js",
+  "./update.js",
   "./auth.js",
   "./store.js",
   "./qbooks.js",

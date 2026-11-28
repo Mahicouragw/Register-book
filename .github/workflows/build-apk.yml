@@ -171,6 +171,69 @@ jobs:
           ls -lh RegisterBook.apk
           echo "APK_SIZE=$(du -h RegisterBook.apk | cut -f1)" >> "$GITHUB_ENV"
 
+      # Read the version straight out of the APK instead of trusting the
+      # workflow number. This is the same pair Android compares, so the
+      # in-app updater can never be told about a version that does not exist.
+      - name: Read the built version from the APK
+        id: apkver
+        run: |
+          set -e
+          AAPT2=$(ls -d "$ANDROID_HOME"/build-tools/*/aapt2 | sort -V | tail -n1)
+          BADGING=$("$AAPT2" dump badging android/app/build/outputs/apk/release/app-release.apk | head -n1)
+          VCODE=$(echo "$BADGING" | sed -E "s/.*versionCode='([0-9]+)'.*/\1/")
+          VNAME=$(echo "$BADGING" | sed -E "s/.*versionName='([^']*)'.*/\1/")
+          echo "version_code=$VCODE" >> "$GITHUB_OUTPUT"
+          echo "version_name=$VNAME" >> "$GITHUB_OUTPUT"
+          echo "APK says: $VNAME (code $VCODE)"
+
+      # version.json is what the installed app downloads to learn that a newer
+      # build exists. Generating it from the APK means publishing a release and
+      # announcing it can never drift apart.
+      - name: Write version.json (what the in-app updater reads)
+        run: |
+          node -e '
+            const fs = require("fs");
+            const version_name = process.env.VERSION_NAME;
+            const version_code = Number(process.env.VERSION_CODE);
+            const manifest = {
+              version_name,
+              version_code,
+              title: "Update to the latest version",
+              changelog: "Bug fixes, faster performance, and new features.",
+              apk_url: "https://github.com/Mahicouragw/Register-book/releases/download/apk-latest/RegisterBook.apk",
+              force_update: false
+            };
+            fs.writeFileSync("version.json", JSON.stringify(manifest, null, 2) + "\n");
+            console.log(fs.readFileSync("version.json", "utf8"));
+          '
+        env:
+          VERSION_NAME: ${{ steps.apkver.outputs.version_name }}
+          VERSION_CODE: ${{ steps.apkver.outputs.version_code }}
+
+      # Commit version.json back to main only when it actually changed, so the
+      # published manifest always points at the newest APK. The [skip ci] tag
+      # stops this commit from triggering another build (which would loop).
+      # Pages then republishes the site, and every installed app sees the new
+      # version on its next launch.
+      - name: Publish version.json so installed apps can see the update
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if git diff --quiet -- version.json; then
+            echo "version.json is already current."
+            exit 0
+          fi
+          git add version.json
+          git commit -m "chore: publish version.json for ${{ steps.apkver.outputs.version_name }} (code ${{ steps.apkver.outputs.version_code }}) [skip ci]"
+          # Do not fail the whole build over this. The APK is already published
+          # at this point, so a rejected commit only means the in-app update
+          # panel is not offered yet — never that the release is broken.
+          if git push; then
+            echo "version.json pushed — installed apps will see the update."
+          else
+            echo "::warning title=version.json not published::The APK was released, but the manifest commit was rejected. Update version.json on main by hand so the in-app updater can offer this build."
+          fi
+
       - name: Upload to the workflow run (backup copy)
         uses: actions/upload-artifact@v4
         with:
